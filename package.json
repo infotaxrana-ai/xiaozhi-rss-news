@@ -1,14 +1,14 @@
 {
-  "name": "xiaozhi-mega-news-feed",
-  "version": "2.0.0",
+  "name": "xiaozhi-mcp-service",
+  "version": "1.0.0",
   "type": "module",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js",
-    "build": "echo 'No build step required'"
+    "start": "node index.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^0.6.0",
-    "rss-parser": "^3.13.0"
+    "axios": "^1.6.0",
+    "ws": "^8.16.0"
   }
 }
