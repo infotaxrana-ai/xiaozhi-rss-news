@@ -1,126 +1,138 @@
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
-import Parser from "rss-parser";
+import WebSocket from "ws";
 import http from "http";
+import Parser from "rss-parser";
 
-// === Render Web Service Port Binding ===
 const PORT = process.env.PORT || 10000;
+const XIAOZHI_WSS_URL = "wss://api.xiaozhi.me/mcp/?token=eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEwMzIwNzcsImFnZW50SWQiOjI0OTc5NTgsImVuZHBvaW50SWQiOiJhZ2VudF8yNDk3OTU4IiwicHVycG9zZSI6Im1jcC1lbmRwb2ludCIsImlhdCI6MTc5MjA0NTAyMywiZXhwIjoxODIzNjAyNjIzfQ.IxfB-uqYWVbFWRTVjvDXaQ8BF1yUb_kbC1-iRzcYKVpw1RbpXNf1JizO37DWz8__B64iUC0FUDF2M00FSjI5aA";
 
+const parser = new Parser({
+  headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
+  timeout: 5000
+});
+
+// Render Health Check
 http.createServer((req, res) => {
-  res.writeHead(200, { "Content-Type": "text/plain" });
-  res.end("Xiaozhi Mega News Feed MCP Server is Live!");
-}).listen(PORT, () => {
-  console.log(`HTTP Health check server running on port ${PORT}`);
-});
+  res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
+  res.end("Xiaozhi News Feed MCP (55 Feeds) is Live!");
+}).listen(PORT, () => console.log(`Health check running on port ${PORT}`));
 
-// === MCP Server Setup ===
-const server = new Server(
-  { name: "xiaozhi-mega-news-feed", version: "2.0.0" }, 
-  { capabilities: { tools: {} } }
-);
-const parser = new Parser();
+// ৫৫টি নিউজ মিডিয়ার RSS Feed লিস্ট
+const NEWS_SOURCES = [
+  // জাতীয় ও জনপ্রিয় দৈনিক (বাংলাদেশ)
+  { name: "Prothom Alo", url: "https://www.prothomalo.com/feed" },
+  { name: "BBC Bangla", url: "https://www.bbc.com/bengali/index.xml" },
+  { name: "BDNews24", url: "https://bangla.bdnews24.com/rss" },
+  { name: "Samakal", url: "https://samakal.com/rss" },
+  { name: "Ittefaq", url: "https://www.ittefaq.com.bd/feed" },
+  { name: "Kaler Kantho", url: "https://www.kalerkantho.com/rss.xml" },
+  { name: "Jugantor", url: "https://www.jugantor.com/feed" },
+  { name: "Manab Zamin", url: "https://mzamin.com/rss.php" },
+  { name: "Daily Star Bangla", url: "https://bangla.thedailystar.net/rss" },
+  { name: "Naya Diganta", url: "https://www.dailynayadiganta.com/rss" },
+  { name: "Janakantha", url: "https://www.dailyjanakantha.com/rss.xml" },
+  { name: "Bhorer Kagoj", url: "https://www.bhorerkagoj.com/feed/" },
+  { name: "Jaijaidin", url: "https://www.jaijaidinbd.com/rss.xml" },
+  { name: "Daily Inqilab", url: "https://www.dailyinqilab.com/rss.xml" },
+  { name: "Amader Shomoy", url: "https://www.dainikamadershomoy.com/rss.xml" },
+  
+  // টিভি চ্যানেল (বাংলাদেশ)
+  { name: "Somoy TV", url: "https://www.somoynews.tv/rss.xml" },
+  { name: "Jamuna TV", url: "https://www.jamuna.tv/feed" },
+  { name: "Independent TV", url: "https://www.independent24.com/rss.xml" },
+  { name: "Channel i", url: "https://www.channelionline.com/feed/" },
+  { name: "NTV", url: "https://www.ntvbd.com/rss.xml" },
+  { name: "ATN News", url: "https://www.atnnewstv.com/feed/" },
+  { name: "Ekattor TV", url: "https://ekattor.tv/feed/" },
+  { name: "News24", url: "https://www.news24bd.tv/rss.xml" },
+  { name: "DBC News", url: "https://dbcnews.tv/feed/" },
+  { name: "RTV", url: "https://www.rtvonline.com/feed/" },
 
-// ৫৫টি শীর্ষ গ্লোবাল ও ন্যাশনাল মিডিয়ার আরএসএস ফিড ডেটাবেজ
-const NEWS_FEEDS = {
-  // === বাংলাদেশের ১০টি শীর্ষ পত্রিকা ===
-  "প্রথম আলো": "https://prothomalo.com",
-  "দ্য ডেইলি স্টার (বাংলা)": "https://thedailystar.net",
-  "যুগান্তর": "https://jugantor.com",
-  "কালের কণ্ঠ": "https://kalerkantho.com",
-  "সমকাল": "https://samakal.com",
-  "ইত্তেফাক": "https://ittefaq.com.bd",
-  "বাংলাদেশ প্রতিদিন": "https://bd-pratidin.com",
-  "দৈনিক ইনকিলাব": "https://dailyinqilab.com",
-  "মানবজমিন": "https://mzamin.com",
-  "আমাদের সময়": "https://amadershomoy.com",
+  // অনলাইন নিউজ পোর্টাল
+  { name: "Dhaka Post", url: "https://www.dhakapost.com/rss.xml" },
+  { name: "Jago News 24", url: "https://www.jagonews24.com/rss/rss.xml" },
+  { name: "Bangla Tribune", url: "https://www.banglatribune.com/feed/" },
+  { name: "RisingBD", url: "https://www.risingbd.com/rss.xml" },
+  { name: "Barta24", url: "https://barta24.com/rss.xml" },
+  { name: "Channel24", url: "https://www.channel24bd.tv/feed/" },
+  { name: "BD Pratidin", url: "https://www.bd-pratidin.com/rss.xml" },
 
-  // === ৫টি সেরা ওয়েব-বেসড মিডিয়া ===
-  "বিডিনিউজ২৪": "https://bdnews24.com",
-  "বাংলানিউজ২৪": "https://banglanews24.com",
-  "ঢাকা পোস্ট": "https://dhakapost.com",
-  "জাগোনিউজ২৪": "https://jagonews24.com",
-  "বাংলা ট্রিবিউন": "https://banglatribune.com",
+  // আন্তর্জাতিক বাংলা বিভাগ
+  { name: "Deutsche Welle Bangla", url: "https://rss.dw.com/xml/rss-ben-news" },
+  { name: "VOA Bangla", url: "https://www.voabangla.com/api/z-$m_qvyov" },
+  { name: "TRT Bangla", url: "https://www.trt.net.tr/bengali/rss" },
 
-  // === ২০টি টিভি চ্যানেল মিডিয়া ===
-  "সময় টিভি": "https://somoynews.tv",
-  "চ্যানেল আই": "https://channelionline.com",
-  "এনটিভি অনলাইন": "https://ntvbd.com",
-  "আরটিভি নিউজ": "https://rtvonline.com",
-  "যমুনা টিভি": "https://jamuna.tv",
-  "ডিবিসি নিউজ": "https://dbcnews.tv",
-  "একাত্তর টিভি": "https://71.tv",
-  "নিউজ২৪": "https://news24bd.tv",
-  "ইন্ডিপেন্ডেন্ট টিভি": "https://independent24.com",
-  "এটিএন বাংলা": "https://atnbangla.tv",
-  "বাংলাভিশন": "https://bvnews24.com",
-  "গাজী টিভি (জিটিভি)": "https://gtv.com.bd",
-  "চ্যানেল টোয়েন্টিফোর": "https://channel24bd.tv",
-  "দেশ টিভি": "https://desh.tv",
-  "ডিডাব্লিউ বাংলা": "https://dw.com",
-  "বিবিসি বাংলা": "https://bbci.co.uk",
-  "ভয়েস অফ আমেরিকা": "https://voanews.com",
-  "এনএইচকে ওয়ার্ল্ড বাংলা": "https://nhk.or.jp",
-  "পিপলস রেডিও": "https://peoplesradio.fm",
-  "রেডিও ভূমি": "https://radiobhumi.fm",
+  // টেকনোলজি ও খেলাধুলা
+  { name: "TechShohor", url: "https://techshohor.com/feed/" },
+  { name: "Techtunes", url: "https://www.techtunes.co/feed/" },
+  { name: "Cricfrenzy", url: "https://www.cricfrenzy.com/rss.xml" },
+  { name: "Sports24", url: "https://www.sports24.com.bd/feed/" },
 
-  // === ১০টি সেরা ভারতীয় মিডিয়া ===
-  "আনন্দবাজার পত্রিকা": "https://anandabazar.com",
-  "দ্য হিন্দু": "https://thehindu.com",
-  "টাইমস অফ ইন্ডিয়া": "https://timesofindia.indiatimes.com/rssfeeds/-2128936835.cms",
-  "ইন্ডিয়ান এক্সপ্রেস": "https://indianexpress.com",
-  "এনডিটিভি (NDTV)": "https://feedburner.com",
-  "হিন্দুস্তান টাইমস": "https://hindustantimes.com",
-  "ইন্ডিয়া টুডে": "https://indiatoday.in",
-  "জি নিউজ (Zee News)": "https://india.com",
-  "নিউজ১৮ ইন্ডিয়া": "https://news18.com",
-  "দ্য প্রিন্ট (ThePrint)": "https://theprint.in",
+  // ইংরেজি ও আন্তর্জাতিক
+  { name: "The Daily Star (English)", url: "https://www.thedailystar.net/frontpage/rss.xml" },
+  { name: "Dhaka Tribune", url: "https://www.dhakatribune.com/feed/" },
+  { name: "BBC World News", url: "http://feeds.bbci.co.uk/news/rss.xml" },
+  { name: "Al Jazeera", url: "https://www.aljazeera.com/xml/rss/all.xml" },
+  { name: "Reuters Top News", url: "https://www.reutersagency.com/feed/?best-topics=top-news" },
+  { name: "CNN Edition", url: "http://rss.cnn.com/rss/edition.rss" },
+  { name: "TechCrunch", url: "https://techcrunch.com/feed/" },
+  { name: "The Verge", url: "https://www.theverge.com/rss/index.xml" },
+  { name: "Wired", url: "https://www.wired.com/feed/rss" },
+  { name: "Goal.com", url: "https://www.goal.com/en/feeds/news" },
+  { name: "ESPN Cricinfo", url: "https://www.espncricinfo.com/rss/content/story/feeds/0.xml" },
+  { name: "NDTV News", url: "https://feeds.feedburner.com/ndtvnews-top-stories" },
+  { name: "Times of India", url: "https://timesofindia.indiatimes.com/rssfeedstopstories.cms" },
+  { name: "Anandabazar Patrika", url: "https://www.anandabazar.com/rss.xml" }
+];
 
-  // === ১০টি আন্তর্জাতিক টপ ক্লাস মিডিয়া ===
-  "রয়টার্স (Reuters)": "https://reutersagency.com",
-  "আল জাজিরা": "https://aljazeera.com",
-  "বিবিসি নিউজ (World)": "https://bbci.co.uk",
-  "সিএনএন (CNN)": "http://cnn.com",
-  "নিউ ইয়র্ক টাইমস": "https://nytimes.com",
-  "দ্য গার্ডিয়ান": "https://theguardian.com",
-  "ব্লুমবার্গ (Bloomberg)": "https://bloomberg.com",
-  "ডয়েচে ভেলে (DW English)": "https://dw.com",
-  "ফ্রান্স ২৪ (France 24)": "https://france24.com",
-  "ইউরোনিউজ (Euronews)": "https://euronews.com"
-};
+function connect() {
+  const ws = new WebSocket(XIAOZHI_WSS_URL);
+  ws.on("open", () => console.log("Connected News MCP (55 Feeds) to Xiaozhi!"));
 
-server.setRequestHandler(ListToolsRequestSchema, async () => ({
-  tools: [{ 
-    name: "get_global_breaking_news", 
-    description: "বাংলাদেশ, ভারত এবং আন্তর্জাতিক শীর্ষ ৫৫টি মিডিয়া থেকে সর্বশেষ লাইভ ব্রেকিং নিউজ রিড করার টুল।" 
-  }]
-}));
+  ws.on("message", async (data) => {
+    try {
+      const msg = JSON.parse(data.toString());
 
-server.setRequestHandler(CallToolRequestSchema, async (request) => {
-  if (request.params.name === "get_global_breaking_news") {
-    let reportLines = [];
-    
-    for (const [mediaName, url] of Object.entries(NEWS_FEEDS)) {
-      try {
-        const feed = await parser.parseURL(url);
-        if (feed.items && feed.items.length > 0) {
-          const latestTitle = feed.items[0].title.trim();
-          reportLines.push(`- [${mediaName}] ${latestTitle}`);
-        }
-      } catch (error) {
-        continue; // কোনো নির্দিষ্ট মিডিয়া ডাউন থাকলে কোড ক্র্যাশ না করে পরেরটায় যাবে
+      if (msg.method === "tools/list") {
+        ws.send(JSON.stringify({
+          jsonrpc: "2.0", id: msg.id,
+          result: {
+            tools: [{
+              name: "get_latest_news",
+              description: "৫৫টি দেশি ও আন্তর্জাতিক সংবাদ মাধ্যম থেকে সর্বশেষ খবর পাওয়ার টুল।",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  source: { type: "string", description: "মিডিয়ার নাম (যেমন: Prothom Alo, BBC Bangla, Somoy TV, Al Jazeera)" }
+                }
+              }
+            }]
+          }
+        }));
       }
-    }
 
-    if (reportLines.length === 0) {
-      return { content: [{ type: "text", text: "দুঃখিত, এই মুহূর্তে কোনো মিডিয়া সোর্স থেকে তাজা খবর পাওয়া যায়নি।" }] };
-    }
+      if (msg.method === "tools/call" && msg.params?.name === "get_latest_news") {
+        const reqSource = msg.params.arguments?.source?.toLowerCase();
+        
+        // নির্দিষ্ট সোর্স সিলেক্ট বা র্যান্ডম সোর্স বাছাই
+        let selectedSource = NEWS_SOURCES.find(s => s.name.toLowerCase().includes(reqSource)) || NEWS_SOURCES[0];
 
-    // সব সোর্স থেকে লেটেস্ট খবরগুলো একসাথে যুক্ত করে রেসপন্স পাঠাবে
-    const fullSummary = reportLines.join("\n");
-    return { content: [{ type: "text", text: `আজকের বৈশ্বিক ও জাতীয় শীর্ষ সংবাদাবলি:\n${fullSummary}` }] };
-  }
-});
+        try {
+          const feed = await parser.parseURL(selectedSource.url);
+          const topArticles = feed.items.slice(0, 5).map((item, index) => `${index + 1}. ${item.title}`).join("\n");
 
-const transport = new StdioServerTransport();
-await server.connect(transport);
+          const responseText = `রানা ভাই, ${selectedSource.name} থেকে সর্বশেষ ব্রেকিং নিউজ:\n\n${topArticles}`;
+          ws.send(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { content: [{ type: "text", text: responseText }] } }));
+        } catch (e) {
+          ws.send(JSON.stringify({ 
+            jsonrpc: "2.0", 
+            id: msg.id, 
+            result: { content: [{ type: "text", text: `রানা ভাই, ${selectedSource.name} এর ফিড পেতে সমস্যা হয়েছে। আবার চেষ্টা করুন।` }] } 
+          }));
+        }
+      }
+    } catch (e) {}
+  });
+
+  ws.on("close", () => setTimeout(connect, 5000));
+}
+connect();
