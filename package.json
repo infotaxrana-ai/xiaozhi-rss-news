@@ -1,5 +1,5 @@
 {
-  "name": "xiaozhi-mcp-service",
+  "name": "xiaozhi-news-mcp",
   "version": "1.0.0",
   "type": "module",
   "main": "index.js",
@@ -9,6 +9,7 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^0.6.0",
     "axios": "^1.6.0",
+    "rss-parser": "^3.13.0",
     "ws": "^8.16.0"
   }
 }
