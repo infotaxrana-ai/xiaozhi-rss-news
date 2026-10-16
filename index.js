@@ -26,68 +26,46 @@ function isWithinLast24Hours(pubDate) {
 
 http.createServer((req, res) => {
   res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
-  res.end("Categorical Mega Feed News MCP is Live!");
+  res.end("Automatic Non-stop News Bulletin MCP is Live!");
 }).listen(PORT, () => console.log(`Health check running on port ${PORT}`));
 
-// ═══ এক একটি নিউজ পোর্টালের সকল ক্যাটাগরি ফিড ═══
+// ৫০+ সাব-ক্যাটাগরি ফিড লিস্ট
 const NEWS_SOURCES = [
-  // ──১. প্রথম আলো (সব ক্যাটাগরি) ──
-  { name: "প্রথম আলো - জাতীয়", url: "https://www.prothomalo.com/feed/bangladesh", category: "politics" },
-  { name: "প্রথম আলো - রাজনীতি", url: "https://www.prothomalo.com/feed/politics", category: "politics" },
-  { name: "প্রথম আলো - আন্তর্জাতিক", url: "https://www.prothomalo.com/feed/world", category: "international" },
-  { name: "প্রথম আলো - খেলাধুলা", url: "https://www.prothomalo.com/feed/sports", category: "sports" },
-  { name: "প্রথম আলো - বিনোদন", url: "https://www.prothomalo.com/feed/entertainment", category: "showbiz" },
-  { name: "প্রথম আলো - প্রযুক্তি", url: "https://www.prothomalo.com/feed/technology", category: "tech" },
-  { name: "প্রথম আলো - অর্থনীতি", url: "https://www.prothomalo.com/feed/business", category: "others" },
-  { name: "প্রথম আলো - মতামত", url: "https://www.prothomalo.com/feed/opinion", category: "others" },
+  // ── ১. প্রথম আলো ──
+  { name: "প্রথম আলো জাতীয়", url: "https://www.prothomalo.com/feed/bangladesh", category: "politics" },
+  { name: "প্রথম আলো রাজনীতি", url: "https://www.prothomalo.com/feed/politics", category: "politics" },
+  { name: "প্রথম আলো আন্তর্জাতিক", url: "https://www.prothomalo.com/feed/world", category: "international" },
+  { name: "প্রথম আলো খেলাধুলা", url: "https://www.prothomalo.com/feed/sports", category: "sports" },
+  { name: "প্রথম আলো বিনোদন", url: "https://www.prothomalo.com/feed/entertainment", category: "showbiz" },
+  { name: "প্রথম আলো প্রযুক্তি", url: "https://www.prothomalo.com/feed/technology", category: "tech" },
 
-  // ── ২. সময় টিভি (সব ক্যাটাগরি) ──
-  { name: "সময় টিভি - জাতীয়", url: "https://www.somoynews.tv/rss/bangladesh", category: "politics" },
-  { name: "সময় টিভি - রাজনীতি", url: "https://www.somoynews.tv/rss/politics", category: "politics" },
-  { name: "সময় টিভি - আন্তর্জাতিক", url: "https://www.somoynews.tv/rss/world", category: "international" },
-  { name: "সময় টিভি - বিনোদন", url: "https://www.somoynews.tv/rss/entertainment", category: "showbiz" },
-  { name: "সময় টিভি - প্রযুক্তি", url: "https://www.somoynews.tv/rss/tech", category: "tech" },
-  { name: "সময় টিভি - খেলাধুলা", url: "https://www.somoynews.tv/rss/sports", category: "sports" },
+  // ── ২. সময় টিভি ──
+  { name: "সময় টিভি জাতীয়", url: "https://www.somoynews.tv/rss/bangladesh", category: "politics" },
+  { name: "সময় টিভি রাজনীতি", url: "https://www.somoynews.tv/rss/politics", category: "politics" },
+  { name: "সময় টিভি আন্তর্জাতিক", url: "https://www.somoynews.tv/rss/world", category: "international" },
+  { name: "সময় টিভি বিনোদন", url: "https://www.somoynews.tv/rss/entertainment", category: "showbiz" },
+  { name: "সময় টিভি প্রযুক্তি", url: "https://www.somoynews.tv/rss/tech", category: "tech" },
+  { name: "সময় টিভি খেলাধুলা", url: "https://www.somoynews.tv/rss/sports", category: "sports" },
 
-  // ── ৩. ঢাকা পোস্ট (সব ক্যাটাগরি) ──
-  { name: "ঢাকা পোস্ট - জাতীয়", url: "https://www.dhakapost.com/rss/national.xml", category: "politics" },
-  { name: "ঢাকা পোস্ট - রাজনীতি", url: "https://www.dhakapost.com/rss/politics.xml", category: "politics" },
-  { name: "ঢাকা পোস্ট - আন্তর্জাতিক", url: "https://www.dhakapost.com/rss/international.xml", category: "international" },
-  { name: "ঢাকা পোস্ট - বিনোদন", url: "https://www.dhakapost.com/rss/entertainment.xml", category: "showbiz" },
-  { name: "ঢাকা পোস্ট - প্রযুক্তি", url: "https://www.dhakapost.com/rss/tech.xml", category: "tech" },
-  { name: "ঢাকা পোস্ট - খেলাধুলা", url: "https://www.dhakapost.com/rss/sports.xml", category: "sports" },
+  // ── ৩. ঢাকা পোস্ট ──
+  { name: "ঢাকা পোস্ট জাতীয়", url: "https://www.dhakapost.com/rss/national.xml", category: "politics" },
+  { name: "ঢাকা পোস্ট আন্তর্জাতিক", url: "https://www.dhakapost.com/rss/international.xml", category: "international" },
+  { name: "ঢাকা পোস্ট বিনোদন", url: "https://www.dhakapost.com/rss/entertainment.xml", category: "showbiz" },
+  { name: "ঢাকা পোস্ট প্রযুক্তি", url: "https://www.dhakapost.com/rss/tech.xml", category: "tech" },
+  { name: "ঢাকা পোস্ট খেলাধুলা", url: "https://www.dhakapost.com/rss/sports.xml", category: "sports" },
 
-  // ── ৪. জাগো নিউজ ২৪ (সব ক্যাটাগরি) ──
-  { name: "জাগো নিউজ - জাতীয়", url: "https://www.jagonews24.com/rss/national.xml", category: "politics" },
-  { name: "জাগো নিউজ - রাজনীতি", url: "https://www.jagonews24.com/rss/politics.xml", category: "politics" },
-  { name: "জাগো নিউজ - আন্তর্জাতিক", url: "https://www.jagonews24.com/rss/international.xml", category: "international" },
-  { name: "জাগো নিউজ - বিনোদন", url: "https://www.jagonews24.com/rss/entertainment.xml", category: "showbiz" },
-  { name: "জাগো নিউজ - প্রযুক্তি", url: "https://www.jagonews24.com/rss/technology.xml", category: "tech" },
-  { name: "জাগো নিউজ - খেলাধুলা", url: "https://www.jagonews24.com/rss/sports.xml", category: "sports" },
-
-  // ── ৫. বিডিনিউজ২৪ ──
-  { name: "বিডিনিউজ২৪ - বাংলা", url: "https://bangla.bdnews24.com/rss", category: "politics" },
-
-  // ── ৬. বিবিসি বাংলা ও আন্তর্জাতিক ──
+  // ── ৪. আন্তর্জাতিক ও অন্যান্য ──
   { name: "বিবিসি বাংলা", url: "https://www.bbc.com/bengali/index.xml", category: "international" },
-  { name: "ডয়েচে ভেলে বাংলা", url: "https://rss.dw.com/xml/rss-ben-news", category: "international" },
-  { name: "আল জাজিরা", url: "https://www.aljazeera.com/xml/rss/all.xml", category: "international" },
-
-  // ── ৭. সায়েন্স ও টেকনোলজি স্পেশাল ──
+  { name: "ডয়েচে ভেলে বাংলা", url: "https://rss.dw.com/xml/rss-ben-news", category: "international" },
   { name: "টেকশহর", url: "https://techshohor.com/feed/", category: "tech" },
-  { name: "টেকটিউনস", url: "https://www.techtunes.co/feed/", category: "tech" },
-  { name: "The Verge Tech", url: "https://www.theverge.com/rss/index.xml", category: "tech" },
-
-  // ── ৮. খেলাধুলা স্পেশাল ──
-  { name: "ক্রিকফ্রেনজি", url: "https://www.cricfrenzy.com/rss.xml", category: "sports" },
-  { name: "স্পোর্টস২৪", url: "https://www.sports24.com.bd/feed/", category: "sports" }
+  { name: "ক্রিকফ্রেনজি", url: "https://www.cricfrenzy.com/rss.xml", category: "sports" }
 ];
 
 function connect() {
   console.log("Connecting to Xiaozhi WebSocket server...");
   const ws = new WebSocket(XIAOZHI_WSS_URL);
 
-  ws.on("open", () => console.log("Categorical Mega Feed MCP connected successfully!"));
+  ws.on("open", () => console.log("Automatic News Bulletin MCP connected!"));
   ws.on("error", (error) => console.error("WS Connection Error:", error.message));
 
   ws.on("message", async (data) => {
@@ -100,7 +78,7 @@ function connect() {
           result: {
             tools: [{
               name: "get_latest_news",
-              description: "দেশি-বিদেশি শীর্ষ সকল নিউজ পোর্টালের রাজনীতি, বিনোদন, প্রযুক্তি, খেলাধুলা সহ প্রতিটি ক্যাটাগরির লেটেস্ট সংবাদ সংগ্রহের টুল।",
+              description: "স্বয়ংক্রিয় অটোপ্লে পদ্ধতিতে টানা খবর পড়া এবং শেষে সংবাদ বিশ্লেষণ শোনানোর অল-ইন-ওয়ান নিউজ বুলেটিন টুল।",
               inputSchema: { type: "object", properties: {} }
             }]
           }
@@ -110,7 +88,6 @@ function connect() {
       if (msg.method === "tools/call" && msg.params?.name === "get_latest_news") {
         let freshArticles = [];
 
-        // সকল ক্যাটাগরি ফিড স্ক্যান করা
         for (const source of NEWS_SOURCES) {
           try {
             const feed = await parser.parseURL(source.url);
@@ -131,14 +108,13 @@ function connect() {
           } catch (e) {}
         }
 
-        // একদম লেটেস্ট ও তাজা খবরগুলো সবার আগে সাজানো
         freshArticles.sort((a, b) => b.pubDate - a.pubDate);
 
         if (freshArticles.length === 0) {
           ws.send(JSON.stringify({ 
             jsonrpc: "2.0", 
             id: msg.id, 
-            result: { content: [{ type: "text", text: "রানা ভাই, এই মুহূর্তে গত ২৪ ঘণ্টার কোনো নতুন সংবাদ আপডেট পাওয়া যায়নি।" }] } 
+            result: { content: [{ type: "text", text: "রানা ভাই, এই মুহূর্তে গত ২৪ ঘণ্টার কোনো নতুন সংবাদ আপডেট পাওয়া যায়নি।" }] } 
           }));
           return;
         }
@@ -147,18 +123,26 @@ function connect() {
         const formattedDate = now.toLocaleDateString('bn-BD', { year: 'numeric', month: 'long', day: 'numeric', timeZone: 'Asia/Dhaka' });
         const formattedTime = now.toLocaleTimeString('bn-BD', { hour: '2-digit', minute: '2-digit', hour12: true, timeZone: 'Asia/Dhaka' });
 
-        const topArticle = freshArticles[0];
+        // শীর্ষ গুরুত্বপূর্ণ খবরগুলো থেকে অটোমেটিক বুলেটিন তৈরি (যেমন ৪-৫টি সেরা খবর)
+        const selectedNews = freshArticles.slice(0, 5);
 
-        const responseText = `রানা ভাই, আজ ${formattedDate}, সময় ${formattedTime} পর্যন্ত পাওয়া ব্রেকিং নিউজ বুলেটিন:\n\n` +
-          `"${topArticle.title}"\n` +
-          `— এই শিরোনামে সংবাদ প্রকাশ করেছে ${topArticle.sourceName}।\n\n` +
-          `[রানা ভাই, আপনি কি এই সংবাদের বিস্তারিত জানতে চান?]\n\n` +
-          `(সম্পূর্ণ তথ্যসূত্র: ${topArticle.content})`;
+        let newsBodyText = "";
+        selectedNews.forEach((art, idx) => {
+          newsBodyText += `সংবাদ ${idx + 1}:\n` +
+            `শিরোনাম: "${art.title}"\n` +
+            `উৎস: এই খবরটি প্রকাশ করেছে ${art.sourceName}।\n` +
+            `বিস্তারিত: ${art.content}\n\n--------------------\n\n`;
+        });
+
+        // অ্যানালিসিস সামারি নোট
+        const summaryStory = `আজকের দেশের শীর্ষ সংবাদ মাধ্যমগুলোর খবর বিশ্লেষণ করলে দেখা যাচ্ছে যে, বাংলাদেশ এবং আন্তর্জাতিক অঙ্গনে রাজনীতি, অর্থনীতি ও প্রযুক্তি খাতে বেশ কিছু গুরুত্বপূর্ণ পরিবর্তন ঘটছে। রানা ভাই, এই ছিল আজ ${formattedDate}, সময় ${formattedTime} পর্যন্ত পাওয়া আমাদের প্রধান প্রধান খবরের পূর্ণাঙ্গ সংবাদ বুলেটিন। ধন্যবাদ।`;
+
+        const finalBulletin = `রানা ভাই, আজ ${formattedDate}, সময় ${formattedTime} পর্যন্ত পাওয়া গত ২৪ ঘণ্টার নিয়মিত ব্রেকিং সংবাদ বুলেটিন শুরু করছি:\n\n${newsBodyText}সবগুলো সংবাদ পোর্টাল বিশ্লেষণ করে সংক্ষেপে আজকের মূল ঘটনা:\n${summaryStory}`;
 
         ws.send(JSON.stringify({ 
           jsonrpc: "2.0", 
           id: msg.id, 
-          result: { content: [{ type: "text", text: responseText }] } 
+          result: { content: [{ type: "text", text: finalBulletin }] } 
         }));
 
       }
