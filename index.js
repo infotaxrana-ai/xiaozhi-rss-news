@@ -4,8 +4,8 @@ import Parser from "rss-parser";
 
 const PORT = process.env.PORT || 10000;
 
-// ⚠️ Xiaozhi AI ড্যাশবোর্ড থেকে জেনারেট করা সচল টোকেনটি এখানে বসাবেন
-const XIAOZHI_WSS_URL = "wss://api.xiaozhi.me/mcp/?token=YOUR_VALID_TOKEN_HERE";
+// আপনার নতুন সচল টোকেনসহ URL
+const XIAOZHI_WSS_URL = "wss://api.xiaozhi.me/mcp/?token=eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEwMzIwNzcsImFnZW50SWQiOjI0OTc5NTgsImVuZHBvaW50SWQiOiJhZ2VudF8yNDk3OTU4IiwicHVycG9zZSI6Im1jcC1lbmRwb2ludCIsImlhdCI6MTc5MjEzODU0MywiZXhwIjoxODIzNjk2MTQzfQ.F4FFJg5FiZDpepoTk_YKvaeQ3WiW6Y7z0XDHfSUR_yo1vF2EWTlxgvTN05FE0v3T5fU_FfRbrr5eaZn2NRpXXw";
 
 const parser = new Parser({
   headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
@@ -19,11 +19,11 @@ function cleanText(text) {
 
 // ২৫ ঘণ্টার পুরনো খবর ফিল্টার করার ফাংশন
 function isWithinLast24Hours(pubDate) {
-  if (!pubDate) return true; // ডেট না থাকলে বাইডিফল্ট এলাউ করা হবে
+  if (!pubDate) return true;
   const articleDate = new Date(pubDate);
   const now = new Date();
   const diffInHours = (now - articleDate) / (1000 * 60 * 60);
-  return diffInHours <= 25; // সর্বোচ্চ ২৫ ঘণ্টার ভেতরের খবর
+  return diffInHours <= 25;
 }
 
 http.createServer((req, res) => {
@@ -37,7 +37,7 @@ const NEWS_SOURCES = [
   { name: "প্রথম আলো", url: "https://www.prothomalo.com/feed", category: "politics" },
   { name: "সময় টিভি", url: "https://www.somoynews.tv/rss.xml", category: "politics" },
   { name: "যমুনা টিভি", url: "https://www.jamuna.tv/feed", category: "politics" },
-  { name: "বিডিটাইপ / বিডিনিউজ২৪", url: "https://bangla.bdnews24.com/rss", category: "politics" },
+  { name: "বিডিনিউজ২৪", url: "https://bangla.bdnews24.com/rss", category: "politics" },
   { name: "সমকাল", url: "https://samakal.com/rss", category: "politics" },
   { name: "ইত্তেফাক", url: "https://www.ittefaq.com.bd/feed", category: "politics" },
   { name: "যুগান্তর", url: "https://www.jugantor.com/feed", category: "politics" },
@@ -70,7 +70,10 @@ function connect() {
   const ws = new WebSocket(XIAOZHI_WSS_URL);
 
   ws.on("open", () => console.log("Real-time News MCP connected successfully!"));
-  ws.on("error", (error) => console.error("WS Connection Error:", error.message));
+  
+  ws.on("error", (error) => {
+    console.error("WS Connection Error:", error.message);
+  });
 
   ws.on("message", async (data) => {
     try {
@@ -133,7 +136,6 @@ function connect() {
         const formattedDate = now.toLocaleDateString('bn-BD', dateOptions);
         const formattedTime = now.toLocaleTimeString('bn-BD', timeOptions);
 
-        // সবচেয়ে লেটেস্ট আর্টিকেলটি ইন্টারঅ্যাক্টিভ ফরম্যাটে তৈরি
         const topArticle = freshArticles[0];
 
         const responseText = `রানা ভাই, আজ ${formattedDate}, সময় ${formattedTime} পর্যন্ত পাওয়া গত ২৪ ঘণ্টার আপডেট ব্রেকিং নিউজ পেশ করছি।\n\n` +
@@ -150,7 +152,7 @@ function connect() {
 
       }
     } catch (e) {
-      console.error("Message Error:", e.message);
+      console.error("Message Processing Error:", e.message);
     }
   });
 
