@@ -26,10 +26,10 @@ function isWithinLast24Hours(pubDate) {
 
 http.createServer((req, res) => {
   res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
-  res.end("Full Categorical Streamed News Bulletin MCP is Live!");
+  res.end("Unlimited Categorical News MCP is Live!");
 }).listen(PORT, () => console.log(`Health check running on port ${PORT}`));
 
-// ৫০+ সাব-ক্যাটাগরি ফিডের পূর্ণাঙ্গ তালিকা
+// ৫০+ সাব-ক্যাটাগরি ফিড
 const NEWS_SOURCES = [
   // ── ১. প্রথম আলো ──
   { name: "প্রথম আলো জাতীয়", url: "https://www.prothomalo.com/feed/bangladesh", category: "politics" },
@@ -61,7 +61,7 @@ const NEWS_SOURCES = [
   { name: "জাগো নিউজ প্রযুক্তি", url: "https://www.jagonews24.com/rss/technology.xml", category: "tech" },
   { name: "জাগো নিউজ খেলাধুলা", url: "https://www.jagonews24.com/rss/sports.xml", category: "sports" },
 
-  // ── ৫. আন্তর্জাতিক ও স্পেশাল ──
+  // ── ৫. আন্তর্জাতিক ও অন্যান্য ──
   { name: "বিবিসি বাংলা", url: "https://www.bbc.com/bengali/index.xml", category: "international" },
   { name: "ডয়েচে ভেলে বাংলা", url: "https://rss.dw.com/xml/rss-ben-news", category: "international" },
   { name: "টেকশহর", url: "https://techshohor.com/feed/", category: "tech" },
@@ -72,7 +72,7 @@ function connect() {
   console.log("Connecting to Xiaozhi WebSocket server...");
   const ws = new WebSocket(XIAOZHI_WSS_URL);
 
-  ws.on("open", () => console.log("Full News Stream MCP connected!"));
+  ws.on("open", () => console.log("Unlimited News MCP connected!"));
   ws.on("error", (error) => console.error("WS Connection Error:", error.message));
 
   ws.on("message", async (data) => {
@@ -85,7 +85,7 @@ function connect() {
           result: {
             tools: [{
               name: "get_latest_news",
-              description: "ক্যাটাগরিভিত্তিক সমৃদ্ধ ও বিস্তারিত সংবাদ বুলেটিন সরবরাহ করার টুল।",
+              description: "ক্যাটাগরিভিত্তিক ২৪ ঘণ্টার সমস্ত খবর কোনো সীমানার বাধ্যবাধকতা ছাড়া পড়ার টুল।",
               inputSchema: { type: "object", properties: {} }
             }]
           }
@@ -121,7 +121,7 @@ function connect() {
           ws.send(JSON.stringify({ 
             jsonrpc: "2.0", 
             id: msg.id, 
-            result: { content: [{ type: "text", text: "রানা ভাই, এই মুহূর্তে গত ২৪ ঘণ্টার কোনো নতুন সংবাদ সংগৃহীত হয়নি।" }] } 
+            result: { content: [{ type: "text", text: "রানা ভাই, বর্তমানে নতুন কোনো খবর নেই।" }] } 
           }));
           return;
         }
@@ -130,20 +130,20 @@ function connect() {
         const formattedDate = now.toLocaleDateString('bn-BD', { year: 'numeric', month: 'long', day: 'numeric', timeZone: 'Asia/Dhaka' });
         const formattedTime = now.toLocaleTimeString('bn-BD', { hour: '2-digit', minute: '2-digit', hour12: true, timeZone: 'Asia/Dhaka' });
 
-        // প্রতিটি ক্যাটাগরি থেকে পর্যাপ্ত সংবাদ সংগ্রহ
-        const politicsNews = freshArticles.filter(a => a.category === 'politics').slice(0, 4);
-        const intlNews = freshArticles.filter(a => a.category === 'international').slice(0, 3);
-        const sportsNews = freshArticles.filter(a => a.category === 'sports').slice(0, 3);
-        const showbizNews = freshArticles.filter(a => a.category === 'showbiz').slice(0, 3);
-        const techNews = freshArticles.filter(a => a.category === 'tech').slice(0, 3);
+        // কোনো প্রকার slice ফিল্টার ছাড়া সম্পূর্ণ ক্যাটাগরিভিত্তিক ফিল্টারিং
+        const politicsNews = freshArticles.filter(a => a.category === 'politics');
+        const intlNews = freshArticles.filter(a => a.category === 'international');
+        const sportsNews = freshArticles.filter(a => a.category === 'sports');
+        const showbizNews = freshArticles.filter(a => a.category === 'showbiz');
+        const techNews = freshArticles.filter(a => a.category === 'tech');
 
-        let script = `আজ ${formattedDate}, সময় ${formattedTime}। গত ২৪ ঘণ্টার জাতীয় ও আন্তর্জাতিক খবরের পূর্ণাঙ্গ সংবাদ বুলেটিন পেশ করছি।\n\n`;
+        let script = `আজ ${formattedDate}, সময় ${formattedTime}। গত ২৪ ঘণ্টার পাওয়া সবকটি ক্যাটাগরির বিস্তারিত সংবাদ বুলেটিন শুরু করছি।\n\n`;
 
         const appendCategory = (catTitle, items) => {
           if (items.length === 0) return "";
-          let text = `--- ${catTitle} সংবাদ ---\n`;
+          let text = `--- ${catTitle} --- \n`;
           items.forEach((art) => {
-            text += `শিরোনাম: ${art.title}। এই খবরটি প্রকাশ করেছে ${art.sourceName}। বিস্তারিত তথ্য: ${art.content}।\n\n`;
+            text += `শিরোনাম: ${art.title}। এই খবরটি প্রকাশ করেছে ${art.sourceName}। বিস্তারিত: ${art.content}।\n\n`;
           });
           return text;
         };
@@ -154,7 +154,7 @@ function connect() {
         script += appendCategory("শোবিজ ও বিনোদন", showbizNews);
         script += appendCategory("বিজ্ঞান ও প্রযুক্তি", techNews);
 
-        script += `আজকের সকল সংবাদ পোর্টালের খবর বিশ্লেষণ করে দেখা যাচ্ছে যে, দেশ ও বিদেশে রাজনীতি, খেলাধুলা এবং বিনোদন জগতে অনেকগুলো গুরুত্বপূর্ণ ঘটনা ঘটেছে। এই ছিল আমাদের আজকের পূর্ণাঙ্গ সংবাদ বুলেটিন। ধন্যবাদ।`;
+        script += `আজকের সকল পোর্টালের খবর বিশ্লেষণ করে মোটকথা: দেশ ও বিশ্বজুড়ে বিভিন্ন ক্ষেত্রে বেশ কিছু গুরুত্বপূর্ণ ঘটনা ঘটেছে। এই ছিল আমাদের পূর্ণাঙ্গ সংবাদ বুলেটিন। ধন্যবাদ।`;
 
         ws.send(JSON.stringify({ 
           jsonrpc: "2.0", 
