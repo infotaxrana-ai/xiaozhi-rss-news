@@ -18,19 +18,21 @@ function cleanText(text) {
 
 http.createServer((req, res) => {
   res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
-  res.end("BBC Priority & Fallback News MCP is Live!");
+  res.end("BBC Categorical Structured News MCP is Live!");
 }).listen(PORT, () => console.log(`Health check running on port ${PORT}`));
 
-// ── ১. প্রাইমারি সোর্স (BBC Bangla-র সকল ক্যাটাগরি + CNN) ──
-const PRIMARY_SOURCES = [
-  { name: "বিবিসি বাংলা - প্রচ্ছদ", url: "https://www.bbc.com/bengali/index.xml" },
-  { name: "বিবিসি বাংলা - খবর", url: "https://www.bbc.com/bengali/news/index.xml" },
-  { name: "বিবিসি বাংলা - আন্তর্জাতিক", url: "https://www.bbc.com/bengali/world/index.xml" },
-  { name: "BBC Bangla - World", url: "https://feeds.bbci.co.uk/bengali/rss.xml" },
-  { name: "CNN World", url: "http://rss.cnn.com/rss/edition_world.rss" }
+// ── বিবিসি বাংলা ও ক্যাটাগরিভিত্তিক সোর্স লিস্ট ──
+const CATEGORY_SOURCES = [
+  { category: "politics", name: "বিবিসি বাংলা রাজনীতি", url: "https://www.bbc.com/bengali/topics/c1e0z97424yt.xml" },
+  { category: "national", name: "বিবিসি বাংলা জাতীয়", url: "https://www.bbc.com/bengali/news/index.xml" },
+  { category: "other", name: "বিবিসি বাংলা বাংলাদেশ", url: "https://www.bbc.com/bengali/index.xml" },
+  { category: "international", name: "বিবিসি বাংলা আন্তর্জাতিক", url: "https://www.bbc.com/bengali/world/index.xml" },
+  { category: "sports", name: "বিবিসি বাংলা খেলাধুলা", url: "https://www.bbc.com/bengali/topics/c2dwqdpne3rt.xml" },
+  { category: "showbiz", name: "বিবিসি বাংলা বিনোদন", url: "https://www.bbc.com/bengali/topics/cyx527y704gt.xml" },
+  { category: "tech", name: "বিবিসি বাংলা তথ্যপ্রযুক্তি", url: "https://www.bbc.com/bengali/topics/c1e0z9741x8t.xml" }
 ];
 
-// ── ২. ফলব্যাক সোর্স (BBC-তে পর্যাপ্ত খবর না থাকলে এগুলো ব্যবহার হবে) ──
+// ── ফলব্যাক সোর্স (বিবিসি ফিডে খবর কম থাকলে ব্যাকআপ) ──
 const FALLBACK_SOURCES = [
   { name: "প্রথম আলো", url: "https://www.prothomalo.com/feed/bangladesh" },
   { name: "সময় টিভি", url: "https://www.somoynews.tv/rss/bangladesh" },
@@ -41,7 +43,7 @@ function connect() {
   console.log("Connecting to Xiaozhi WebSocket server...");
   const ws = new WebSocket(XIAOZHI_WSS_URL);
 
-  ws.on("open", () => console.log("BBC Priority News MCP connected!"));
+  ws.on("open", () => console.log("BBC Structured News MCP connected!"));
   ws.on("error", (error) => console.error("WS Connection Error:", error.message));
 
   ws.on("message", async (data) => {
@@ -54,7 +56,7 @@ function connect() {
           result: {
             tools: [{
               name: "get_latest_news",
-              description: "বিবিসি বাংলার সকল ক্যাটাগরি ও সিএনএন এর খবর এবং ব্যাকআপ হিসেবে ফলব্যাক পোর্টের খবর পড়ার টুল।",
+              description: "নির্দিষ্ট সিকোয়েন্সে বিবিসি বাংলার রাজনীতি, জাতীয়, আন্তর্জাতিক, খেলাধুলা, বিনোদন ও আইটি খবর পড়ার টুল।",
               inputSchema: { type: "object", properties: {} }
             }]
           }
@@ -62,19 +64,30 @@ function connect() {
       }
 
       if (msg.method === "tools/call" && msg.params?.name === "get_latest_news") {
-        let bbcArticles = [];
-        let fallbackArticles = [];
+        let newsByCat = {
+          politics: [],
+          national: [],
+          other: [],
+          international: [],
+          sports: [],
+          showbiz: [],
+          tech: []
+        };
+        const seenTitles = new Set();
 
-        // ১. আগে বিবিসি বাংলা ও সিএনএন এর ক্যাটাগরি ফিড ফেচ করা
-        for (const source of PRIMARY_SOURCES) {
+        // ১. প্রতিটি ক্যাটাগরি অনুযায়ী খবর সংগ্রহ
+        for (const source of CATEGORY_SOURCES) {
           try {
             const feed = await parser.parseURL(source.url);
             feed.items.forEach(item => {
-              const cleanContent = cleanText(item.contentSnippet || item.content || item.summary);
-              if (cleanContent && cleanContent.length > 15) {
-                bbcArticles.push({
-                  title: cleanText(item.title),
-                  content: cleanContent,
+              const title = cleanText(item.title);
+              const content = cleanText(item.contentSnippet || item.content || item.summary);
+              
+              if (title && !seenTitles.has(title) && content.length > 15) {
+                seenTitles.add(title);
+                newsByCat[source.category].push({
+                  title,
+                  content,
                   sourceName: source.name
                 });
               }
@@ -82,53 +95,48 @@ function connect() {
           } catch (e) {}
         }
 
-        // ২. ব্যাকআপ বা ফলব্যাক ফিড ফেচ করা
+        // ২. খবর কম থাকলে ফলব্যাক দিয়ে ব্যাকআপ
+        let fallbackNews = [];
         for (const source of FALLBACK_SOURCES) {
           try {
             const feed = await parser.parseURL(source.url);
             feed.items.forEach(item => {
-              const cleanContent = cleanText(item.contentSnippet || item.content || item.summary);
-              if (cleanContent && cleanContent.length > 15) {
-                fallbackArticles.push({
-                  title: cleanText(item.title),
-                  content: cleanContent,
-                  sourceName: source.name
-                });
+              const title = cleanText(item.title);
+              const content = cleanText(item.contentSnippet || item.content || item.summary);
+              if (title && !seenTitles.has(title) && content.length > 15) {
+                seenTitles.add(title);
+                fallbackNews.push({ title, content, sourceName: source.name });
               }
             });
           } catch (e) {}
-        }
-
-        // বিবিসি/সিএনএন-এর খবরকে সবার আগে অগ্রাধিকার দেওয়া হবে
-        let combinedNews = [...bbcArticles];
-
-        // যদি বিবিসি-র খবর কম থাকে, তবে ফলব্যাক থেকে যুক্ত করা হবে
-        if (combinedNews.length < 8) {
-          combinedNews = combinedNews.concat(fallbackArticles);
-        }
-
-        if (combinedNews.length === 0) {
-          ws.send(JSON.stringify({ 
-            jsonrpc: "2.0", id: msg.id, 
-            result: { content: [{ type: "text", text: "রানা ভাই, বর্তমানে নতুন কোনো সংগৃহীত সংবাদ পাওয়া যায়নি।" }] } 
-          }));
-          return;
         }
 
         const now = new Date();
         const formattedDate = now.toLocaleDateString('bn-BD', { year: 'numeric', month: 'long', day: 'numeric', timeZone: 'Asia/Dhaka' });
         const formattedTime = now.toLocaleTimeString('bn-BD', { hour: '2-digit', minute: '2-digit', hour12: true, timeZone: 'Asia/Dhaka' });
 
-        // লুপ বা ওভারফ্লো এড়াতে সর্বোচ্চ ১০টি তাজা সংবাদ নেওয়া হচ্ছে
-        const selectedArticles = combinedNews.slice(0, 10);
+        let script = `আজ ${formattedDate}, সময় ${formattedTime}। বিবিসি বাংলা থেকে বিশেষ সংবাদ বুলেটিন শুরু করছি।\n\n`;
 
-        let script = `আজ ${formattedDate}, সময় ${formattedTime}। বিবিসি বাংলা, সিএনএন এবং শীর্ষ সংবাদ মাধ্যম থেকে সংগৃহীত সংবাদ বুলেটিন শুরু করছি।\n\n`;
+        // নির্দিষ্ট সিকোয়েন্সে স্ক্রিপ্ট সাজানো
+        const addSection = (sectionHeader, items) => {
+          if (items.length === 0) return "";
+          let sectionText = `--- ${sectionHeader} ---\n`;
+          items.slice(0, 3).forEach((art, idx) => {
+            sectionText += `সংবাদ: ${art.title}। উৎস: ${art.sourceName}। বিস্তারিত: ${art.content}।\n\n`;
+          });
+          return sectionText;
+        };
 
-        selectedArticles.forEach((art, idx) => {
-          script += `খবর ${idx + 1}: ${art.title}। মাধ্যম: ${art.sourceName}। বিস্তারিত: ${art.content}।\n\n`;
-        });
+        // নির্দিষ্ট ক্রম অনুযায়ী যুক্তকরণ
+        script += addSection("রাজনৈতিক সংবাদ", newsByCat.politics);
+        script += addSection("জাতীয় সংবাদ", newsByCat.national);
+        script += addSection("দেশের অন্যান্য সংবাদ", newsByCat.other.length > 0 ? newsByCat.other : fallbackNews.slice(0, 2));
+        script += addSection("আন্তর্জাতিক সংবাদ", newsByCat.international);
+        script += addSection("খেলাধুলার খবর", newsByCat.sports);
+        script += addSection("বিনোদন জগতের খবর", newsByCat.showbiz);
+        script += addSection("তথ্য ও প্রযুক্তি সংবাদ", newsByCat.tech);
 
-        script += `আজকের সংগৃহীত বিবিসি বাংলা ও অন্যান্য আন্তর্জাতিক সংবাদ বিশ্লেষণ করে দেশ ও বিদেশের বর্তমান পরিস্থিতি তুলে ধরা হলো। এই ছিল আমাদের সংবাদ বুলেটিন। ধন্যবাদ।`;
+        script += `বিবিসি বাংলা থেকে আজকের প্রধান প্রধান সকল ক্যাটাগরির সংবাদের উপস্থাপনা এখানেই শেষ হলো। ধন্যবাদ।`;
 
         ws.send(JSON.stringify({ 
           jsonrpc: "2.0", id: msg.id, 
@@ -137,7 +145,7 @@ function connect() {
 
       }
     } catch (e) {
-      console.error("Message Processing Error:", e.message);
+      console.error("Message Error:", e.message);
     }
   });
 
