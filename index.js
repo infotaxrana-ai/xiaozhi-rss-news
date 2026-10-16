@@ -26,10 +26,9 @@ function isWithinLast24Hours(pubDate) {
 
 http.createServer((req, res) => {
   res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
-  res.end("Automatic Non-stop News Bulletin MCP is Live!");
+  res.end("Clean Final News MCP is Live!");
 }).listen(PORT, () => console.log(`Health check running on port ${PORT}`));
 
-// ৫০+ সাব-ক্যাটাগরি ফিড লিস্ট
 const NEWS_SOURCES = [
   // ── ১. প্রথম আলো ──
   { name: "প্রথম আলো জাতীয়", url: "https://www.prothomalo.com/feed/bangladesh", category: "politics" },
@@ -65,7 +64,7 @@ function connect() {
   console.log("Connecting to Xiaozhi WebSocket server...");
   const ws = new WebSocket(XIAOZHI_WSS_URL);
 
-  ws.on("open", () => console.log("Automatic News Bulletin MCP connected!"));
+  ws.on("open", () => console.log("Clean News MCP connected!"));
   ws.on("error", (error) => console.error("WS Connection Error:", error.message));
 
   ws.on("message", async (data) => {
@@ -78,7 +77,7 @@ function connect() {
           result: {
             tools: [{
               name: "get_latest_news",
-              description: "স্বয়ংক্রিয় অটোপ্লে পদ্ধতিতে টানা খবর পড়া এবং শেষে সংবাদ বিশ্লেষণ শোনানোর অল-ইন-ওয়ান নিউজ বুলেটিন টুল।",
+              description: "সংবাদ বুলেটিনের স্ক্রিপ্ট পড়ার টুল।",
               inputSchema: { type: "object", properties: {} }
             }]
           }
@@ -114,7 +113,7 @@ function connect() {
           ws.send(JSON.stringify({ 
             jsonrpc: "2.0", 
             id: msg.id, 
-            result: { content: [{ type: "text", text: "রানা ভাই, এই মুহূর্তে গত ২৪ ঘণ্টার কোনো নতুন সংবাদ আপডেট পাওয়া যায়নি।" }] } 
+            result: { content: [{ type: "text", text: "রানা ভাই, বর্তমানে গত ২৪ ঘণ্টার কোনো নতুন সংবাদ সংগৃহীত হয়নি।" }] } 
           }));
           return;
         }
@@ -123,26 +122,20 @@ function connect() {
         const formattedDate = now.toLocaleDateString('bn-BD', { year: 'numeric', month: 'long', day: 'numeric', timeZone: 'Asia/Dhaka' });
         const formattedTime = now.toLocaleTimeString('bn-BD', { hour: '2-digit', minute: '2-digit', hour12: true, timeZone: 'Asia/Dhaka' });
 
-        // শীর্ষ গুরুত্বপূর্ণ খবরগুলো থেকে অটোমেটিক বুলেটিন তৈরি (যেমন ৪-৫টি সেরা খবর)
-        const selectedNews = freshArticles.slice(0, 15);
+        const selectedNews = freshArticles.slice(0, 4);
 
-        let newsBodyText = "";
-        selectedNews.forEach((art, idx) => {
-          newsBodyText += `সংবাদ ${idx + 1}:\n` +
-            `শিরোনাম: "${art.title}"\n` +
-            `উৎস: এই খবরটি প্রকাশ করেছে ${art.sourceName}।\n` +
-            `বিস্তারিত: ${art.content}\n\n--------------------\n\n`;
+        let script = `আজ ${formattedDate}, সময় ${formattedTime}। গত ২৪ ঘণ্টার নিয়মিত সংবাদ বুলেটিন সরাসরি পাঠ করছি। `;
+
+        selectedNews.forEach((art) => {
+          script += `প্রথমত, ${art.title}। এই খবরটি প্রকাশ করেছে ${art.sourceName}। বিস্তারিত তথ্য হলো: ${art.content}। `;
         });
 
-        // অ্যানালিসিস সামারি নোট
-        const summaryStory = `আজকের দেশের শীর্ষ সংবাদ মাধ্যমগুলোর খবর বিশ্লেষণ করলে দেখা যাচ্ছে যে, বাংলাদেশ এবং আন্তর্জাতিক অঙ্গনে রাজনীতি, অর্থনীতি ও প্রযুক্তি খাতে বেশ কিছু গুরুত্বপূর্ণ পরিবর্তন ঘটছে। রানা ভাই, এই ছিল আজ ${formattedDate}, সময় ${formattedTime} পর্যন্ত পাওয়া আমাদের প্রধান প্রধান খবরের পূর্ণাঙ্গ সংবাদ বুলেটিন। ধন্যবাদ।`;
-
-        const finalBulletin = `রানা ভাই, আজ ${formattedDate}, সময় ${formattedTime} পর্যন্ত পাওয়া গত ২৪ ঘণ্টার নিয়মিত ব্রেকিং সংবাদ বুলেটিন শুরু করছি:\n\n${newsBodyText}সবগুলো সংবাদ পোর্টাল বিশ্লেষণ করে সংক্ষেপে আজকের মূল ঘটনা:\n${summaryStory}`;
+        script += `আজকের সকল সংবাদ মাধ্যম বিশ্লেষণ করে সারসংক্ষেপ: বাংলাদেশে এবং আন্তর্জাতিক অঙ্গনে ঘটে যাওয়া ঘটনাগুলো পর্যালোচনা করলে দেখা যাচ্ছে যে রাজনীতি, অর্থনীতি এবং প্রযুক্তি খাতে বেশ কিছু ইতিবাচক পরিবর্তন দেখা যাচ্ছে। এই ছিল আজকের সংবাদ বুলেটিন।`;
 
         ws.send(JSON.stringify({ 
           jsonrpc: "2.0", 
           id: msg.id, 
-          result: { content: [{ type: "text", text: finalBulletin }] } 
+          result: { content: [{ type: "text", text: script }] } 
         }));
 
       }
