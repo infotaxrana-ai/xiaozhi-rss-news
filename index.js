@@ -3,12 +3,18 @@ import http from "http";
 import Parser from "rss-parser";
 
 const PORT = process.env.PORT || 10000;
-const XIAOZHI_WSS_URL = "wss://api.xiaozhi.me/mcp/?token=eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEwMzIwNzcsImFnZW50SWQiOjI0OTc5NTgsImVuZHBvaW50SWQiOiJhZ2VudF8yNDk3OTU4IiwicHVycG9zZSI6Im1jcC1lbmRwb2ludCIsImlhdCI6MTc5MjA0NTAyMywiZXhwIjoxODIzNjAyNjIzfQ.IxfB-uqYWVbFWRTVjvDXaQ8BF1yUb_kbC1-iRzcYKVpw1RbpXNf1JizO37DWz8__B64iUC0FUDF2M00FSjI5aA";
+const XIAOZHI_WSS_URL = "wss://api.xiaozhi.me/mcp/?token=eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEwMzIwNzcsImFnZW50SWQiOjI0OTc5NTgsImVuZHBvaW50SWQiOjJhZ2VudF8yNDk3OTU4IiwicHVycG9zZSI6Im1jcC1lbmRwb2ludCIsImlhdCI6MTc5MjA0NTAyMywiZXhwIjoxODIzNjAyNjIzfQ.IxfB-uqYWVbFWRTVjvDXaQ8BF1yUb_kbC1-iRzcYKVpw1RbpXNf1JizO37DWz8__B64iUC0FUDF2M00FSjI5aA";
 
 const parser = new Parser({
   headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
   timeout: 5000
 });
+
+// HTML Clean করার হেল্পার ফাংশন (যাতে সংবাদের ভেতর কোনো HTML ট্যাগ না থাকে)
+function cleanText(text) {
+  if (!text) return "";
+  return text.replace(/<[^>]*>?/gm, '').replace(/\s+/g, ' ').trim();
+}
 
 // Render Health Check
 http.createServer((req, res) => {
@@ -16,9 +22,9 @@ http.createServer((req, res) => {
   res.end("Xiaozhi News Feed MCP (55 Feeds) is Live!");
 }).listen(PORT, () => console.log(`Health check running on port ${PORT}`));
 
-// ৫৫টি নিউজ মিডিয়ার RSS Feed লিস্ট
+// ৫৫টি নিউজ মিডিয়ার RSS Feed লিস্ট
 const NEWS_SOURCES = [
-  // জাতীয় ও জনপ্রিয় দৈনিক (বাংলাদেশ)
+  // জাতীয় ও জনপ্রিয় দৈনিক (বাংলাদেশ)
   { name: "Prothom Alo", url: "https://www.prothomalo.com/feed" },
   { name: "BBC Bangla", url: "https://www.bbc.com/bengali/index.xml" },
   { name: "BDNews24", url: "https://bangla.bdnews24.com/rss" },
@@ -98,11 +104,11 @@ function connect() {
           result: {
             tools: [{
               name: "get_latest_news",
-              description: "৫৫টি দেশি ও আন্তর্জাতিক সংবাদ মাধ্যম থেকে সর্বশেষ খবর পাওয়ার টুল।",
+              description: "৫৫টি দেশি ও আন্তর্জাতিক সংবাদ মাধ্যম থেকে সর্বশেষ খবর ও বিবরণ পাওয়ার টুল।",
               inputSchema: {
                 type: "object",
                 properties: {
-                  source: { type: "string", description: "মিডিয়ার নাম (যেমন: Prothom Alo, BBC Bangla, Somoy TV, Al Jazeera)" }
+                  source: { type: "string", description: "মিডিয়ার নাম (যেমন: Prothom Alo, BBC Bangla, Somoy TV, Al Jazeera)" }
                 }
               }
             }]
@@ -118,15 +124,26 @@ function connect() {
 
         try {
           const feed = await parser.parseURL(selectedSource.url);
-          const topArticles = feed.items.slice(0, 5).map((item, index) => `${index + 1}. ${item.title}`).join("\n");
+          
+          // প্রথম ৩টি প্রধান খবরের শিরোনাম ও বিবরণ একসাথে নেওয়া হচ্ছে
+          const topArticles = feed.items.slice(0, 3).map((item, index) => {
+            const title = cleanText(item.title);
+            const summary = cleanText(item.contentSnippet || item.content || item.summary || "বিস্তারিত বিবরণ পাওয়া যায়নি।");
+            return `সংবাদ ${index + 1}:\nশিরোনাম: ${title}\nবিবরণ: ${summary}`;
+          }).join("\n\n---\n\n");
 
-          const responseText = `রানা ভাই, ${selectedSource.name} থেকে সর্বশেষ ব্রেকিং নিউজ:\n\n${topArticles}`;
-          ws.send(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { content: [{ type: "text", text: responseText }] } }));
+          const responseText = `রানা ভাই, ${selectedSource.name} থেকে সর্বশেষ ব্রেকিং নিউজ এবং বিস্তারিত বিবরণ নিচে দেওয়া হলো:\n\n${topArticles}\n\nআপনি চাইলে এই বিষয়ে বিস্তারিত পরে শুনাতে পারি।`;
+          
+          ws.send(JSON.stringify({ 
+            jsonrpc: "2.0", 
+            id: msg.id, 
+            result: { content: [{ type: "text", text: responseText }] } 
+          }));
         } catch (e) {
           ws.send(JSON.stringify({ 
             jsonrpc: "2.0", 
             id: msg.id, 
-            result: { content: [{ type: "text", text: `রানা ভাই, ${selectedSource.name} এর ফিড পেতে সমস্যা হয়েছে। আবার চেষ্টা করুন।` }] } 
+            result: { content: [{ type: "text", text: `রানা ভাই, ${selectedSource.name} এর ফিড পেতে সমস্যা হয়েছে। আবার চেষ্টা করুন।` }] } 
           }));
         }
       }
