@@ -3,20 +3,22 @@ import http from "http";
 import Parser from "rss-parser";
 
 const PORT = process.env.PORT || 10000;
-const XIAOZHI_WSS_URL = "wss://api.xiaozhi.me/mcp/?token=eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEwMzIwNzcsImFnZW50SWQiOjI0OTc5NTgsImVuZHBvaW50SWQiOjJhZ2VudF8yNDk3OTU4IiwicHVycG9zZSI6Im1jcC1lbmRwb2ludCIsImlhdCI6MTc5MjA0NTAyMywiZXhwIjoxODIzNjAyNjIzfQ.IxfB-uqYWVbFWRTVjvDXaQ8BF1yUb_kbC1-iRzcYKVpw1RbpXNf1JizO37DWz8__B64iUC0FUDF2M00FSjI5aA";
+
+// আপনার দেওয়া নতুন আপডেট করা টোকেনসহ URL
+const XIAOZHI_WSS_URL = "wss://api.xiaozhi.me/mcp/?token=eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEwMzIwNzcsImFnZW50SWQiOjI0OTc5NTgsImVuZHBvaW50SWQiOiJhZ2VudF8yNDk3OTU4IiwicHVycG9zZSI6Im1jcC1lbmRwb2ludCIsImlhdCI6MTc5MjEyODM4NSwiZXhwIjoxODIzNjg1OTg1fQ.DAXLmBRkkHX4IbZgfSSJ0MUTjo3ZAjedIAsVpiDDly-jzp5ukbCwCjGw-rUN5A0kXh25Ebkl-D6qDfsQ-pzTVA";
 
 const parser = new Parser({
   headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
   timeout: 5000
 });
 
-// HTML Clean করার হেল্পার ফাংশন (যাতে সংবাদের ভেতর কোনো HTML ট্যাগ না থাকে)
+// HTML ট্যাগ ক্লিন করার হেল্পার ফাংশন
 function cleanText(text) {
   if (!text) return "";
   return text.replace(/<[^>]*>?/gm, '').replace(/\s+/g, ' ').trim();
 }
 
-// Render Health Check
+// Render Health Check (Render সচল রাখার জন্য)
 http.createServer((req, res) => {
   res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
   res.end("Xiaozhi News Feed MCP (55 Feeds) is Live!");
@@ -91,8 +93,17 @@ const NEWS_SOURCES = [
 ];
 
 function connect() {
+  console.log("Connecting to Xiaozhi WebSocket server...");
   const ws = new WebSocket(XIAOZHI_WSS_URL);
-  ws.on("open", () => console.log("Connected News MCP (55 Feeds) to Xiaozhi!"));
+
+  ws.on("open", () => {
+    console.log("Connected News MCP (55 Feeds) to Xiaozhi!");
+  });
+
+  // 🔴 গুরুত্বপূর্ণ: Error Catch করে App Crash হওয়া বন্ধ করবে
+  ws.on("error", (error) => {
+    console.error("WebSocket Connection Error:", error.message);
+  });
 
   ws.on("message", async (data) => {
     try {
@@ -119,20 +130,19 @@ function connect() {
       if (msg.method === "tools/call" && msg.params?.name === "get_latest_news") {
         const reqSource = msg.params.arguments?.source?.toLowerCase();
         
-        // নির্দিষ্ট সোর্স সিলেক্ট বা র্যান্ডম সোর্স বাছাই
         let selectedSource = NEWS_SOURCES.find(s => s.name.toLowerCase().includes(reqSource)) || NEWS_SOURCES[0];
 
         try {
           const feed = await parser.parseURL(selectedSource.url);
           
-          // প্রথম ৩টি প্রধান খবরের শিরোনাম ও বিবরণ একসাথে নেওয়া হচ্ছে
+          // শীর্ষ ৩টি সংবাদের শিরোনাম এবং বিবরণ একসাথে প্রসেস করা হচ্ছে
           const topArticles = feed.items.slice(0, 3).map((item, index) => {
             const title = cleanText(item.title);
-            const summary = cleanText(item.contentSnippet || item.content || item.summary || "বিস্তারিত বিবরণ পাওয়া যায়নি।");
+            const summary = cleanText(item.contentSnippet || item.content || item.summary || "বিস্তারিত বিবরণ পাওয়া যায়নি।");
             return `সংবাদ ${index + 1}:\nশিরোনাম: ${title}\nবিবরণ: ${summary}`;
           }).join("\n\n---\n\n");
 
-          const responseText = `রানা ভাই, ${selectedSource.name} থেকে সর্বশেষ ব্রেকিং নিউজ এবং বিস্তারিত বিবরণ নিচে দেওয়া হলো:\n\n${topArticles}\n\nআপনি চাইলে এই বিষয়ে বিস্তারিত পরে শুনাতে পারি।`;
+          const responseText = `রানা ভাই, ${selectedSource.name} থেকে সর্বশেষ খবর এবং বিবরণ নিচে দেওয়া হলো:\n\n${topArticles}`;
           
           ws.send(JSON.stringify({ 
             jsonrpc: "2.0", 
@@ -147,9 +157,15 @@ function connect() {
           }));
         }
       }
-    } catch (e) {}
+    } catch (e) {
+      console.error("Message Processing Error:", e.message);
+    }
   });
 
-  ws.on("close", () => setTimeout(connect, 5000));
+  ws.on("close", () => {
+    console.log("WebSocket disconnected. Retrying in 5 seconds...");
+    setTimeout(connect, 5000);
+  });
 }
+
 connect();
