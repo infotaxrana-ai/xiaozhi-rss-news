@@ -124,7 +124,7 @@ function connect() {
         const formattedTime = now.toLocaleTimeString('bn-BD', { hour: '2-digit', minute: '2-digit', hour12: true, timeZone: 'Asia/Dhaka' });
 
         // শীর্ষ গুরুত্বপূর্ণ খবরগুলো থেকে অটোমেটিক বুলেটিন তৈরি (যেমন ৪-৫টি সেরা খবর)
-        const selectedNews = freshArticles.slice(0, 5);
+        const selectedNews = freshArticles.slice(0, 15);
 
         let newsBodyText = "";
         selectedNews.forEach((art, idx) => {
