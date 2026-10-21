@@ -2,26 +2,32 @@ import http from "node:http";
 import WebSocket from "ws";
 import Parser from "rss-parser";
 
-// ====================================================
-// ALEXA BANGLA NEWS RADIO v2.1
-// Official Xiaozhi MCP - Full Ready-Made Version
-// Music firmware and Music MCP are not modified.
-// ====================================================
+// ==================================================
+// ALEXA BANGLA NEWS RADIO v3.0
+// Headlines first, then detailed radio bulletin
+// Official Xiaozhi MCP
+// ==================================================
 
 const PORT = Number(process.env.PORT || 10000);
 const SERVICE_NAME = "Alexa Bangla News Radio";
-const VERSION = "2.1.0";
+const VERSION = "3.0.0";
 
-// Keep your existing Xiaozhi endpoint in Render Environment.
 const XIAOZHI_WSS_URL =
   process.env.XIAOZHI_WSS_URL || "";
 
 const TIME_ZONE = "Asia/Dhaka";
 const CACHE_MS = 5 * 60 * 1000;
-const MAX_NEWS = 400;
-const RSS_TIMEOUT = 9000;
 
-const NEWS_SOURCES = [
+// Last 36 hours, including yesterday's news.
+const LOOKBACK_HOURS = 36;
+
+// News per bulletin. Limits protect Xiaozhi TTS.
+const DEFAULT_BATCH = 8;
+const MAX_BATCH = 12;
+const MAX_STORIES = 400;
+const MAX_SUMMARY_CHARS = 850;
+
+const SOURCES = [
   {
     name: "প্রথম আলো",
     url: "https://www.prothomalo.com/feed/",
@@ -49,12 +55,8 @@ const NEWS_SOURCES = [
   }
 ];
 
-// ====================================================
-// RSS CONFIGURATION
-// ====================================================
-
 const parser = new Parser({
-  timeout: RSS_TIMEOUT,
+  timeout: 9000,
   headers: {
     "User-Agent": "Mozilla/5.0",
     "Accept":
@@ -64,36 +66,62 @@ const parser = new Parser({
 
 let cache = {
   at: 0,
-  date: "",
   articles: [],
   statuses: []
 };
 
 let fetching = null;
+let connected = false;
+let socket = null;
+let reconnectTimer = null;
+let heartbeatTimer = null;
+let reconnectDelay = 5000;
 
-// ====================================================
-// DATE AND TEXT UTILITIES
-// ====================================================
+let lastCloseCode = null;
+let lastCloseReason = "";
+let lastMethod = "";
+
+// ==================================================
+// DATE UTILITIES
+// ==================================================
 
 function bdDate(value) {
-  const parts = new Intl.DateTimeFormat("en-US", {
+  return new Intl.DateTimeFormat("bn-BD", {
     timeZone: TIME_ZONE,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit"
-  }).formatToParts(value);
-
-  const get = type =>
-    parts.find(p => p.type === type)?.value;
-
-  return (
-    get("year") + "-" +
-    get("month") + "-" +
-    get("day")
-  );
+    day: "numeric",
+    month: "long",
+    year: "numeric"
+  }).format(value);
 }
 
-function cleanText(value, max = 3500) {
+function bdDateKey(value) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: TIME_ZONE,
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric"
+  }).formatToParts(value);
+
+  const get = key =>
+    parts.find(x => x.type === key)?.value;
+
+  return `${get("year")}-${get("month")}-${get("day")}`;
+}
+
+function bdTime(value) {
+  return new Intl.DateTimeFormat("bn-BD", {
+    timeZone: TIME_ZONE,
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true
+  }).format(value);
+}
+
+// ==================================================
+// TEXT UTILITIES
+// ==================================================
+
+function cleanText(value, max = 4000) {
   return String(value || "")
     .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
     .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ")
@@ -109,8 +137,8 @@ function cleanText(value, max = 3500) {
     .slice(0, max);
 }
 
-function duplicateKey(title) {
-  return cleanText(title, 500)
+function duplicateKey(text) {
+  return cleanText(text, 500)
     .toLowerCase()
     .replace(/[^\p{L}\p{N}]+/gu, " ")
     .trim();
@@ -140,17 +168,15 @@ function categoryOf(text) {
   return "বাংলাদেশ ও অন্যান্য";
 }
 
-// ====================================================
-// NEWS COLLECTION
-// ====================================================
+// ==================================================
+// RSS COLLECTION
+// ==================================================
 
 async function refreshNews() {
-  const today = bdDate(new Date());
   const now = Date.now();
 
   if (
-    cache.date === today &&
-    cache.articles.length > 0 &&
+    cache.articles.length &&
     now - cache.at < CACHE_MS
   ) {
     return cache;
@@ -159,10 +185,18 @@ async function refreshNews() {
   if (fetching) return fetching;
 
   fetching = (async () => {
-    console.log("[RSS] Fetching today's news...");
+    const started = Date.now();
+    const cutoff =
+      started - LOOKBACK_HOURS * 60 * 60 * 1000;
+
+    console.log(
+      "[RSS] Fetching last",
+      LOOKBACK_HOURS,
+      "hours of news"
+    );
 
     const results = await Promise.allSettled(
-      NEWS_SOURCES.map(async source => {
+      SOURCES.map(async source => {
         const feed = await parser.parseURL(source.url);
         const articles = [];
 
@@ -175,22 +209,27 @@ async function refreshNews() {
           if (!rawDate) continue;
 
           const published = new Date(rawDate);
+          const timestamp = published.getTime();
 
-          if (!Number.isFinite(published.getTime()))
-            continue;
+          if (!Number.isFinite(timestamp)) continue;
 
-          if (bdDate(published) !== today)
+          // Ignore future-dated and old news.
+          if (
+            timestamp < cutoff ||
+            timestamp > started + 10 * 60 * 1000
+          ) {
             continue;
+          }
 
           const title = cleanText(item.title, 400);
-
           if (!title) continue;
 
           const summary = cleanText(
             item.contentSnippet ||
             item.summary ||
             item.content ||
-            item["content:encoded"]
+            item["content:encoded"],
+            MAX_SUMMARY_CHARS
           );
 
           articles.push({
@@ -198,8 +237,8 @@ async function refreshNews() {
             summary,
             source: source.name,
             language: source.language,
-            category: categoryOf(title + " " + summary),
-            published: published.toISOString()
+            published: published.toISOString(),
+            category: categoryOf(title + " " + summary)
           });
         }
 
@@ -208,26 +247,24 @@ async function refreshNews() {
     );
 
     const statuses = results.map((result, i) => ({
-      source: NEWS_SOURCES[i].name,
+      source: SOURCES[i].name,
       healthy: result.status === "fulfilled",
-      count:
-        result.status === "fulfilled"
-          ? result.value.length
-          : 0,
-      error:
-        result.status === "rejected"
-          ? String(
-              result.reason?.message || result.reason
-            ).slice(0, 120)
-          : ""
+      count: result.status === "fulfilled"
+        ? result.value.length
+        : 0,
+      error: result.status === "rejected"
+        ? String(
+            result.reason?.message || result.reason
+          ).slice(0, 120)
+        : ""
     }));
 
-    for (const status of statuses) {
-      if (!status.healthy) {
+    for (const state of statuses) {
+      if (!state.healthy) {
         console.warn(
           "[RSS FAILED]",
-          status.source,
-          status.error
+          state.source,
+          state.error
         );
       }
     }
@@ -240,9 +277,8 @@ async function refreshNews() {
       for (const article of result.value) {
         const key = duplicateKey(article.title);
 
-        if (key && !seen.has(key)) {
-          seen.set(key, article);
-        }
+        if (!key || seen.has(key)) continue;
+        seen.set(key, article);
       }
     }
 
@@ -250,26 +286,32 @@ async function refreshNews() {
       .sort((a, b) =>
         b.published.localeCompare(a.published)
       )
-      .slice(0, MAX_NEWS);
+      .slice(0, MAX_STORIES);
 
-    if (articles.length || cache.date !== today) {
+    if (articles.length) {
       cache = {
-        at: now,
-        date: today,
+        at: started,
         articles,
         statuses
       };
     } else {
+      // Retain recent cached content only.
+      const recent = cache.articles.filter(
+        item => {
+          const stamp = Date.parse(item.published);
+          return stamp >= cutoff && stamp <= started;
+        }
+      );
+
       cache = {
-        ...cache,
-        at: now,
+        at: started,
+        articles: recent,
         statuses
       };
     }
 
     console.log(
       "[NEWS]",
-      "Date:", today,
       "Articles:", cache.articles.length,
       "Sources:", JSON.stringify(statuses)
     );
@@ -284,56 +326,25 @@ async function refreshNews() {
   }
 }
 
-// ====================================================
-// MCP NEWS TOOL
-// ====================================================
-
-const newsTool = {
-  name: "get_latest_news",
-
-  description:
-    "Alexa Bangla News Radio। আজকের বাংলাদেশ ও আন্তর্জাতিক সংবাদ বাংলা TV বা Radio Anchor-এর মতো উপস্থাপন করো। খবরের সূত্র উল্লেখ করো। offset দিয়ে পরবর্তী সংবাদ পাওয়া যায়।",
-
-  inputSchema: {
-    type: "object",
-    properties: {
-      offset: {
-        type: "integer",
-        minimum: 0,
-        description:
-          "প্রথম সংবাদে 0। পরবর্তী ব্যাচে আগের offset + limit।"
-      },
-      limit: {
-        type: "integer",
-        minimum: 1,
-        maximum: 3,
-        description:
-          "একবারে 1 থেকে 3টি সংবাদ। ডিফল্ট 2।"
-      },
-      category: {
-        type: "string",
-        description:
-          "সব, রাজনীতি, খেলাধুলা, প্রযুক্তি, অর্থনীতি, আন্তর্জাতিক, বিনোদন, বাংলাদেশ ও অন্যান্য।"
-      }
-    }
-  }
-};
+// ==================================================
+// RADIO NEWS SCRIPT
+// ==================================================
 
 function makeBulletin(news, args = {}) {
   if (!news.articles.length) {
     return (
-      "আজকের যাচাইযোগ্য সংবাদ এই মুহূর্তে পাওয়া যাচ্ছে না। " +
-      "একটু পরে আবার চেষ্টা করুন।"
+      "দুঃখিত, গত ছত্রিশ ঘণ্টার যাচাইযোগ্য " +
+      "সংবাদ এই মুহূর্তে পাওয়া যাচ্ছে না।"
     );
   }
 
   const offset = Number.isInteger(args.offset)
-    ? Math.max(0, Math.min(args.offset, MAX_NEWS))
+    ? Math.max(0, Math.min(args.offset, MAX_STORIES))
     : 0;
 
   const limit = Number.isInteger(args.limit)
-    ? Math.max(1, Math.min(args.limit, 3))
-    : 2;
+    ? Math.max(1, Math.min(args.limit, MAX_BATCH))
+    : DEFAULT_BATCH;
 
   const category =
     typeof args.category === "string"
@@ -343,62 +354,143 @@ function makeBulletin(news, args = {}) {
   const pool =
     category && category !== "সব"
       ? news.articles.filter(
-          article => article.category === category
+          item => item.category === category
         )
       : news.articles;
 
   const selected = pool.slice(offset, offset + limit);
 
   if (!selected.length) {
-    return "এই বিভাগের আর কোনো সংবাদ নেই।";
+    return (
+      "এই নির্বাচিত সংবাদ তালিকার আর কোনো খবর " +
+      "নেই। চাইলে অন্য বিভাগের খবর শুনতে পারেন।"
+    );
   }
 
-  let script =
-    `আজ ${news.date}, বাংলাদেশ সময়। ` +
-    `${SERVICE_NAME} সংবাদ বুলেটিন। ` +
-    "স্বাগতম আজকের সংবাদ আয়োজনে।\n\n";
+  const now = new Date();
+
+  let script = "";
+
+  // News anchor opening.
+  if (offset === 0) {
+    script +=
+      "আসসালামু আলাইকুম। " +
+      "স্বাগতম অ্যালেক্সা বাংলা নিউজ রেডিওতে। " +
+      `আজ ${bdDate(now)}। ` +
+      `বাংলাদেশ সময় ${bdTime(now)}। ` +
+      "এখন শুনছেন সাম্প্রতিক সংবাদ বুলেটিন। " +
+      "এতে গত ছত্রিশ ঘণ্টায় প্রকাশিত খবর রয়েছে। " +
+      "\n\n";
+  } else {
+    script +=
+      "স্বাগতম। এবার শুনুন সংবাদ বুলেটিনের " +
+      "পরবর্তী অংশ।\n\n";
+  }
+
+  // All headlines before the detailed reports.
+  script += "প্রথমেই সংবাদ শিরোনাম।\n\n";
 
   selected.forEach((article, i) => {
     script +=
+      `${offset + i + 1} নম্বর শিরোনাম। ` +
+      `${article.title}।\n`;
+  });
+
+  script +=
+    "\nএবার শুনুন বিস্তারিত সংবাদ।\n\n";
+
+  // Detailed stories.
+  selected.forEach((article, i) => {
+    script +=
       `সংবাদ ${offset + i + 1}। ` +
-      `${article.title}। ` +
-      `সূত্র: ${article.source}। `;
+      `${article.title}।\n`;
+
+    script +=
+      `সংবাদ সূত্র, ${article.source}। `;
 
     if (article.language === "en") {
       script +=
-        "এটি ইংরেজি উৎসের সংবাদ। " +
-        "তথ্য অপরিবর্তিত রেখে বাংলায় উপস্থাপন করুন। ";
+        "এই সংবাদটি ইংরেজি উৎস থেকে সংগ্রহ করা। " +
+        "মূল তথ্য অপরিবর্তিত রেখে বাংলায় " +
+        "উপস্থাপন করুন। ";
     }
 
-    script +=
-      (article.summary ||
-        "RSS ফিডে বিস্তারিত তথ্য পাওয়া যায়নি।") +
-      "\n\n";
+    script += article.summary
+      ? `${article.summary}।\n\n`
+      : "RSS সূত্রে এই খবরের বিস্তারিত " +
+        "বিবরণ পাওয়া যায়নি।\n\n";
   });
 
   const next = offset + selected.length;
 
   if (next < pool.length) {
     script +=
+      "এই পর্বের বিস্তারিত সংবাদ এখানেই শেষ। " +
       `আরও ${pool.length - next}টি সংবাদ রয়েছে। ` +
-      "পরবর্তী সংবাদ শুনতে বলুন, পরের খবর। " +
-      `পরবর্তী offset: ${next}।`;
+      "পরবর্তী পর্ব শুনতে বলুন, পরের খবর। " +
+      `পরবর্তী offset ${next}।`;
   } else {
     script +=
-      "আজকের এই বিভাগের উপলব্ধ সংবাদ শেষ। ধন্যবাদ।";
+      "সাম্প্রতিক সংগৃহীত সংবাদ বুলেটিন " +
+      "এখানেই শেষ। আমাদের সঙ্গে থাকার " +
+      "জন্য ধন্যবাদ।";
   }
 
   return script;
 }
 
-// ====================================================
-// HTTP HEALTH ENDPOINT
-// ====================================================
+// ==================================================
+// MCP TOOL
+// ==================================================
 
-let mcpConnected = false;
-let lastMcpMethod = "";
-let lastCloseCode = null;
-let lastCloseReason = "";
+const newsTool = {
+  name: "get_latest_news",
+
+  description:
+    "Alexa Bangla News Radio। এই টুল দিয়ে " +
+    "গত ৩৬ ঘণ্টার বাংলা ও আন্তর্জাতিক সংবাদ " +
+    "পাওয়া যায়। ব্যবহারকারী খবর শুনতে চাইলে " +
+    "এই টুল ব্যবহার করো। ফিরিয়ে দেওয়া " +
+    "বুলেটিনের শুরুতে সব শিরোনাম, তারপর " +
+    "প্রতিটি খবরের বিস্তারিত রয়েছে। " +
+    "বুলেটিনের ধারাবাহিকতা বজায় রাখো। " +
+    "নতুন বুলেটিনে offset 0 ব্যবহার করো। " +
+    "ব্যবহারকারী পরের খবর চাইলে আগের " +
+    "offset এবং limit অনুযায়ী পরবর্তী " +
+    "offset ব্যবহার করো। সংবাদ বানিয়ে বলবে না।",
+
+  inputSchema: {
+    type: "object",
+    properties: {
+      offset: {
+        type: "integer",
+        minimum: 0,
+        description:
+          "প্রথম পর্বে 0। পরের পর্বে " +
+          "পূর্ববর্তী offset + limit।"
+      },
+      limit: {
+        type: "integer",
+        minimum: 1,
+        maximum: MAX_BATCH,
+        description:
+          "প্রতি পর্বে সর্বোচ্চ 12টি খবর। " +
+          "ডিফল্ট 8।"
+      },
+      category: {
+        type: "string",
+        description:
+          "সব, রাজনীতি, খেলাধুলা, প্রযুক্তি, " +
+          "অর্থনীতি, আন্তর্জাতিক, বিনোদন, " +
+          "বাংলাদেশ ও অন্যান্য।"
+      }
+    }
+  }
+};
+
+// ==================================================
+// HTTP HEALTH
+// ==================================================
 
 http.createServer((req, res) => {
   if (req.url !== "/" && req.url !== "/health") {
@@ -415,56 +507,20 @@ http.createServer((req, res) => {
   res.end(JSON.stringify({
     service: SERVICE_NAME,
     version: VERSION,
-    mcpConnected,
-    lastMcpMethod,
-    lastCloseCode,
-    lastCloseReason,
+    mcpConnected: connected,
     cachedArticles: cache.articles.length,
-    dateBD: cache.date,
-    rssSources: cache.statuses
+    sources: cache.statuses,
+    lastMethod,
+    lastCloseCode,
+    lastCloseReason
   }));
 }).listen(PORT, "0.0.0.0", () => {
   console.log("[HTTP] Listening on", PORT);
 });
 
-// ====================================================
-// MCP CONNECTION MANAGEMENT
-// ====================================================
-
-let socket = null;
-let reconnectTimer = null;
-let reconnectDelay = 5000;
-let heartbeatTimer = null;
-
-function stopHeartbeat() {
-  if (heartbeatTimer) {
-    clearInterval(heartbeatTimer);
-    heartbeatTimer = null;
-  }
-}
-
-function startHeartbeat(ws) {
-  stopHeartbeat();
-
-  heartbeatTimer = setInterval(() => {
-    if (
-      socket !== ws ||
-      ws.readyState !== WebSocket.OPEN
-    ) {
-      return;
-    }
-
-    try {
-      // WebSocket control-frame heartbeat.
-      ws.ping();
-    } catch (error) {
-      console.warn(
-        "[MCP HEARTBEAT ERROR]",
-        error.message
-      );
-    }
-  }, 30000);
-}
+// ==================================================
+// MCP CONNECTION
+// ==================================================
 
 function reply(ws, id, payload) {
   if (
@@ -482,13 +538,40 @@ function reply(ws, id, payload) {
   }));
 }
 
-function scheduleReconnect() {
+function stopHeartbeat() {
+  if (heartbeatTimer) {
+    clearInterval(heartbeatTimer);
+    heartbeatTimer = null;
+  }
+}
+
+function startHeartbeat(ws) {
+  stopHeartbeat();
+
+  heartbeatTimer = setInterval(() => {
+    if (
+      socket === ws &&
+      ws.readyState === WebSocket.OPEN
+    ) {
+      try {
+        ws.ping();
+      } catch (error) {
+        console.warn(
+          "[MCP HEARTBEAT]",
+          error.message
+        );
+      }
+    }
+  }, 30000);
+}
+
+function reconnect() {
   if (reconnectTimer) return;
 
   const delay = reconnectDelay;
 
   console.log(
-    `[MCP] Reconnecting in ${delay / 1000} seconds...`
+    `[MCP] Reconnecting in ${delay / 1000}s`
   );
 
   reconnectTimer = setTimeout(() => {
@@ -505,7 +588,7 @@ function scheduleReconnect() {
 function connect() {
   if (!XIAOZHI_WSS_URL.startsWith("wss://")) {
     console.error(
-      "[MCP] XIAOZHI_WSS_URL is missing or invalid."
+      "[MCP] XIAOZHI_WSS_URL missing."
     );
     return;
   }
@@ -513,8 +596,8 @@ function connect() {
   if (
     socket &&
     (
-      socket.readyState === WebSocket.CONNECTING ||
-      socket.readyState === WebSocket.OPEN
+      socket.readyState === WebSocket.OPEN ||
+      socket.readyState === WebSocket.CONNECTING
     )
   ) {
     return;
@@ -529,20 +612,14 @@ function connect() {
   socket = ws;
 
   let openedAt = 0;
-  let initialized = false;
-  let registered = false;
 
   ws.on("open", () => {
     openedAt = Date.now();
-    mcpConnected = true;
+    connected = true;
 
     console.log("[MCP] Connected successfully");
 
     startHeartbeat(ws);
-  });
-
-  ws.on("pong", () => {
-    // Server responded to the WebSocket heartbeat.
   });
 
   ws.on("error", error => {
@@ -553,52 +630,41 @@ function connect() {
   });
 
   ws.on("close", (code, reason) => {
-    const closeReason =
+    const text =
       reason?.toString("utf8") ||
       "No reason provided";
 
-    const connectedSeconds = openedAt
-      ? Math.round((Date.now() - openedAt) / 1000)
-      : 0;
-
     lastCloseCode = code;
-    lastCloseReason = closeReason.slice(0, 200);
+    lastCloseReason = text.slice(0, 200);
 
     console.warn(
       "[MCP DISCONNECTED]",
       JSON.stringify({
         code,
         reason: lastCloseReason,
-        connectedSeconds,
-        initialized,
-        registered,
-        lastMethod: lastMcpMethod,
-        time: new Date().toISOString()
+        connectedSeconds: openedAt
+          ? Math.round(
+              (Date.now() - openedAt) / 1000
+            )
+          : 0
       })
     );
 
     if (socket === ws) {
       socket = null;
-      mcpConnected = false;
+      connected = false;
       stopHeartbeat();
-      scheduleReconnect();
+      reconnect();
     }
   });
-
-  // ==================================================
-  // MCP JSON-RPC REQUEST HANDLER
-  // ==================================================
 
   ws.on("message", async data => {
     let msg;
 
     try {
       msg = JSON.parse(data.toString());
-    } catch (error) {
-      console.warn(
-        "[MCP INVALID JSON]",
-        error.message
-      );
+    } catch {
+      console.warn("[MCP] Invalid JSON");
       return;
     }
 
@@ -606,32 +672,27 @@ function connect() {
     const id = msg.id;
 
     if (method) {
-      lastMcpMethod = method;
+      lastMethod = method;
       console.log("[MCP REQUEST]", method);
     }
 
-    // ----------------------------------------------
-    // INITIALIZE
-    // ----------------------------------------------
-
+    // MCP Initialize.
     if (method === "initialize") {
-      const requestedVersion =
+      const requested =
         msg.params?.protocolVersion;
 
-      const supportedVersions = [
+      const supported = [
         "2024-11-05",
         "2025-03-26",
         "2025-06-18"
       ];
 
-      const protocolVersion =
-        supportedVersions.includes(requestedVersion)
-          ? requestedVersion
-          : "2024-11-05";
-
       reply(ws, id, {
         result: {
-          protocolVersion,
+          protocolVersion:
+            supported.includes(requested)
+              ? requested
+              : "2024-11-05",
           capabilities: {
             tools: {}
           },
@@ -642,66 +703,37 @@ function connect() {
         }
       });
 
-      initialized = true;
-
-      console.log(
-        "[MCP] Initialize response sent:",
-        protocolVersion
-      );
-
+      console.log("[MCP] Initialize response sent");
       return;
     }
-
-    // ----------------------------------------------
-    // INITIALIZATION NOTIFICATION
-    // ----------------------------------------------
 
     if (method === "notifications/initialized") {
-      console.log(
-        "[MCP] Initialization acknowledged"
-      );
+      console.log("[MCP] Initialization complete");
       return;
     }
-
-    // ----------------------------------------------
-    // MCP PING
-    // ----------------------------------------------
 
     if (method === "ping") {
       reply(ws, id, {
         result: {}
       });
-
-      console.log("[MCP] Ping response sent");
       return;
     }
-
-    // ----------------------------------------------
-    // TOOL DISCOVERY
-    // ----------------------------------------------
 
     if (method === "tools/list") {
       reply(ws, id, {
         result: {
-          tools: [newsTool],
-          nextCursor: ""
+          tools: [newsTool]
         }
       });
 
-      registered = true;
       reconnectDelay = 5000;
 
       console.log(
-        "[MCP] News tool registered:",
+        "[MCP] Tool registered:",
         newsTool.name
       );
-
       return;
     }
-
-    // ----------------------------------------------
-    // NEWS TOOL EXECUTION
-    // ----------------------------------------------
 
     if (method === "tools/call") {
       if (msg.params?.name !== newsTool.name) {
@@ -714,30 +746,30 @@ function connect() {
         return;
       }
 
-      console.log("[NEWS] Tool called");
+      const args = msg.params?.arguments || {};
+
+      console.log(
+        "[NEWS] Tool called:",
+        JSON.stringify(args)
+      );
 
       try {
         const news = await refreshNews();
-
-        const output = makeBulletin(
-          news,
-          msg.params?.arguments || {}
-        );
+        const output = makeBulletin(news, args);
 
         reply(ws, id, {
           result: {
-            content: [
-              {
-                type: "text",
-                text: output
-              }
-            ],
+            content: [{
+              type: "text",
+              text: output
+            }],
             isError: false
           }
         });
 
         console.log(
-          "[NEWS] Tool response sent",
+          "[NEWS] Bulletin sent",
+          "Articles:", news.articles.length,
           "Characters:", output.length
         );
       } catch (error) {
@@ -749,23 +781,16 @@ function connect() {
         reply(ws, id, {
           result: {
             isError: true,
-            content: [
-              {
-                type: "text",
-                text:
-                  "সংবাদ সংগ্রহ করতে সমস্যা হয়েছে।"
-              }
-            ]
+            content: [{
+              type: "text",
+              text:
+                "সংবাদ সংগ্রহে সমস্যা হয়েছে।"
+            }]
           }
         });
       }
-
       return;
     }
-
-    // ----------------------------------------------
-    // UNKNOWN METHODS
-    // ----------------------------------------------
 
     if (
       method &&
@@ -778,28 +803,24 @@ function connect() {
           message: "Method not found"
         }
       });
-
-      console.warn(
-        "[MCP] Unsupported method:",
-        method
-      );
     }
   });
 }
 
-// ====================================================
-// START NEWS MCP
-// ====================================================
+// ==================================================
+// START
+// ==================================================
 
 console.log(
   "[SYSTEM]",
   SERVICE_NAME,
-  "Version:", VERSION
+  "Version:",
+  VERSION
 );
 
 console.log(
-  "[SYSTEM] Configured RSS sources:",
-  NEWS_SOURCES.length
+  "[SYSTEM] RSS sources:",
+  SOURCES.length
 );
 
 connect();
