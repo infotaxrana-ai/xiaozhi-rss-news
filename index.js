@@ -4,13 +4,13 @@ import WebSocket from "ws";
 import Parser from "rss-parser";
 
 // ============================================
-// ALEXA BANGLA NEWS RADIO v3.6
+// ALEXA BANGLA NEWS RADIO v3.8
 // Original v3.5 features preserved
 // Auto Next / Continue / Stop
 // Bengali News | 36 Hours | Detailed Reports
 // ============================================
 
-const VERSION = "3.7.0";
+const VERSION = "3.8.0";
 const SERVICE = "Alexa Bangla News Radio";
 const PORT = Number(process.env.PORT || 10000);
 const WSS_URL = process.env.XIAOZHI_WSS_URL || "";
@@ -25,9 +25,15 @@ const MAX_HTML_BYTES = 1500000;
 const PART_CHARS = 520;
 const MAX_REPORT_CHARS = 1650;
 
+// NEWS RADIO v3.8
+const NEWS_PER_BATCH = 2;
+const FIRST_BATCH_DETAIL_CHARS = 420;
+const NEXT_BATCH_DETAIL_CHARS = 600;
+const NEWS_BATCH_WAIT_MS = 5000;
+
 // Agent-side continuation target.
 // This is metadata, not a server-side TTS timer.
-const AUTO_DELAY_MS = 5000;
+const AUTO_DELAY_MS = 5000; // Advisory only
 
 const SOURCES = [
   {
@@ -884,13 +890,6 @@ async function prepareStory(article) {
 // ============================================
 
 function newsResponse(text, done = false) {
-  const remainingParts = currentStory
-    ? Math.max(
-        0,
-        currentParts.length - currentPartIndex
-      )
-    : 0;
-
   const remainingStories = Math.max(
     0,
     queue.length - queueIndex
@@ -899,28 +898,68 @@ function newsResponse(text, done = false) {
   const hasMore =
     !done &&
     queueActive &&
-    (remainingParts > 0 || remainingStories > 0);
+    remainingStories > 0;
 
-  // NEWS_STOP_WINDOW_V37
-  const spokenText = hasMore ? text.trim() + " রানা ভাই, সংবাদ বন্ধ করতে স্টপ বলুন।" : text;
+  let speech = String(text || "").trim();
+
+  // Announce Stop only once, at the end of
+  // a complete two-news batch.
+  if (hasMore && speech) {
+    speech +=
+      " রানা ভাই, সংবাদ বন্ধ করতে স্টপ বলুন।";
+  }
+
   return {
-    text: spokenText,
+    text: speech,
     hasMore,
     done: !hasMore,
     nextAction: hasMore ? "auto" : null,
-    suggestedDelayMs: hasMore
-      ? AUTO_DELAY_MS
-      : 0,
-    remainingParts,
+    suggestedDelayMs:
+      hasMore ? NEWS_BATCH_WAIT_MS : 0,
+    remainingParts: 0,
     remainingStories
   };
 }
-
 // ============================================
-// NEXT HEADLINE + FIRST DETAIL PART
+// v3.8 TWO-NEWS BATCH ENGINE
 // ============================================
 
-async function nextStory() {
+// Truncate near a sentence ending whenever
+// possible, preserving a sensible summary.
+function boundedNewsDetail(raw, maxChars) {
+  const text = cleanText(raw, MAX_REPORT_CHARS);
+
+  if (!text) {
+    return "এই সংবাদের বিস্তারিত তথ্য পাওয়া যায়নি।";
+  }
+
+  if (text.length <= maxChars) {
+    return text;
+  }
+
+  const candidate = text.slice(0, maxChars + 1);
+
+  const stops = [
+    ...candidate.matchAll(/[।!?]/gu)
+  ].map(m => m.index + m[0].length);
+
+  const goodStop = stops
+    .filter(i => i >= Math.floor(maxChars * 0.55))
+    .pop();
+
+  if (goodStop) {
+    return text.slice(0, goodStop).trim();
+  }
+
+  const cut = candidate.lastIndexOf(" ", maxChars);
+
+  return text.slice(
+    0,
+    cut > 180 ? cut : maxChars
+  ).trim() + "…";
+}
+
+async function nextBatch() {
   if (!queueActive || !queue.length) {
     return newsResponse(
       "সক্রিয় সংবাদ বুলেটিন নেই।",
@@ -930,122 +969,98 @@ async function nextStory() {
 
   if (queueIndex >= queue.length) {
     queueActive = false;
-    currentStory = null;
-    currentParts = [];
-    currentPartIndex = 0;
-
     return newsResponse(
       "সংগৃহীত সব সংবাদ শেষ হয়েছে।",
       true
     );
   }
 
-  const article = queue[queueIndex];
-  queueIndex++;
+  const firstBatch = !bulletinIntroSent;
 
-  currentStory = article;
-  currentParts = await prepareStory(article);
-  currentPartIndex = 0;
+  const detailLimit = firstBatch
+    ? FIRST_BATCH_DETAIL_CHARS
+    : NEXT_BATCH_DETAIL_CHARS;
 
-  let text = "";
+  const lines = [];
 
-  if (!bulletinIntroSent) {
-    text += professionalNewsOpening() + " ";
+  if (firstBatch) {
+    lines.push(professionalNewsOpening());
     bulletinIntroSent = true;
   }
 
-  text +=
-    "শিরোনাম। " +
-    article.title +
-    "। এবার বিস্তারিত সংবাদ। ";
+  let count = 0;
 
-  if (currentParts.length) {
-    text += currentParts[0];
-    currentPartIndex = 1;
-  } else {
-    text +=
-      "এই সংবাদের বিস্তারিত তথ্য পাওয়া যায়নি।";
+  while (
+    count < NEWS_PER_BATCH &&
+    queueIndex < queue.length
+  ) {
+    const article = queue[queueIndex];
+
+    // Advance the cursor once per article.
+    queueIndex++;
+
+    const parts = await prepareStory(article);
+
+    const detail = boundedNewsDetail(
+      parts.join(" "),
+      detailLimit
+    );
+
+    lines.push(
+      "শিরোনাম " +
+      banglaDigits(queueIndex) + "। " +
+      article.title + "। " +
+      "এবার বিস্তারিত সংবাদ। " +
+      detail + "। " +
+      "সংবাদ সূত্র " + article.source + "।"
+    );
+
+    count++;
   }
 
-  // No more "Say next part" announcements.
-  if (currentPartIndex >= currentParts.length) {
-    text += "। সংবাদ সূত্র " +
-      article.source + "।";
-  }
+  // No incomplete part should leak into
+  // the following batch.
+  currentStory = null;
+  currentParts = [];
+  currentPartIndex = 0;
 
-  console.log(
-    "[STORY]",
-    "News:", queueIndex,
-    "Parts:", currentParts.length,
-    "Remaining:", queue.length - queueIndex
-  );
+  const hasMore = queueIndex < queue.length;
 
-  return newsResponse(text);
-}
-
-// ============================================
-// CONTINUE CURRENT STORY
-// ============================================
-
-function nextPart() {
-  if (!currentStory || !currentParts.length) {
-    return newsResponse(
-      "বর্তমানে কোনো সংবাদের বাকি অংশ নেই।"
+  if (!hasMore) {
+    queueActive = false;
+    lines.push(
+      "রানা ভাই, আজকের সংবাদ পরিবেশনা " +
+      "এখানেই শেষ। ধন্যবাদ।"
     );
   }
 
-  if (currentPartIndex >= currentParts.length) {
-    return newsResponse("");
-  }
+  console.log(
+    "[NEWS BATCH]",
+    "Count:", count,
+    "Index:", queueIndex,
+    "Remaining:", queue.length - queueIndex,
+    "First:", firstBatch
+  );
 
-  let text = currentParts[currentPartIndex];
-
-  currentPartIndex++;
-
-  if (currentPartIndex >= currentParts.length) {
-    text +=
-      "। সংবাদ সূত্র " +
-      currentStory.source + "।";
-  }
-
-  // No verbal instruction to say "next".
-  return newsResponse(text);
+  return newsResponse(
+    lines.join(" "),
+    !hasMore
+  );
 }
 
-// ============================================
-// AUTO NEXT — NEW IN v3.6
-// ============================================
+// Backward compatible MCP actions.
+// Each advance returns the next TWO stories.
+async function nextStory() {
+  return nextBatch();
+}
+
+async function nextPart() {
+  return nextBatch();
+}
 
 async function autoAdvance() {
-  if (!queueActive) {
-    return newsResponse(
-      "সংবাদ পরিবেশনা বর্তমানে বন্ধ রয়েছে।",
-      true
-    );
-  }
-
-  // Finish current story before moving on.
-  if (
-    currentStory &&
-    currentPartIndex < currentParts.length
-  ) {
-    console.log(
-      "[AUTO NEXT]",
-      "Continuing current story"
-    );
-
-    return nextPart();
-  }
-
-  // Current story finished; move to next.
-  console.log(
-    "[AUTO NEXT]",
-    "Moving to next headline"
-  );
-
-  return await nextStory();
+  return nextBatch();
 }
-
 // ============================================
 // MANUAL STOP
 // ============================================
@@ -1095,30 +1110,19 @@ const newsTool = {
   name: "get_latest_news",
 
   description:
-    "Alexa Bangla News Radio v3.6। " +
-    "শুরুতে action=start ব্যবহার করো। " +
-    "প্রথমবার সালাম, মিসেস এলেক্সার পরিচয়, " +
-    "তারিখ, বঙ্গাব্দ, বাংলাদেশ সময় এবং " +
-    "বিগত ৩৬ ঘণ্টার সংবাদ ঘোষণা থাকবে। " +
-    "প্রতিটি খবরের শিরোনামের পর বিস্তারিত পড়বে। " +
-    "Auto Radio Mode চালু থাকবে। " +
-    "একটি অংশ বলা শেষ হলে ব্যবহারকারীর " +
-    "স্পষ্ট stop বা অন্য command না থাকলে " +
-    "action=auto দিয়ে পরের অংশ আনবে। " +
-    "বর্তমান খবরের বাকি অংশ শেষ হওয়ার আগে " +
-    "পরের খবর শুরু করবে না। " +
-    "প্রতি অংশের পরে নেক্সট বলুন, " +
-    "পরের অংশ বলুন অথবা অনুমতি চেয়ে " +
-    "কোনো প্রশ্ন করবে না। " +
-    "ব্যবহারকারী stop বললে action=stop। " +
-    "ব্যবহারকারী নিজে next বললে action=next। " +
-    "action=continue বর্তমান খবরের পরের অংশ। " +
-    "সব খবর বাংলায় বলবে। " +
-    "Markdown বা অপ্রয়োজনীয় numbering নয়। " +
-    "কোনো সংবাদ বানাবে না। " +
-    "দুই সেকেন্ড pause শুধু Agent সমর্থন করলে; " +
-    "RSS MCP নিজে microphone শুনতে পারে না।",
-
+    "Alexa Bangla News Radio v3.8। " +
+    "action=start প্রথম দুই খবরের ব্যাচ দেয়। " +
+    "প্রথম ব্যাচে সালাম, মিসেস এলেক্সার পরিচয়, " +
+    "বাংলা ও ইংরেজি তারিখ, বাংলাদেশ সময় থাকবে। " +
+    "প্রতি MCP response-এ দুটি খবর ও বিস্তারিত সারাংশ। " +
+    "একটি ব্যাচের দুই খবর সম্পূর্ণ পড়বে। " +
+    "শেষের Stop ঘোষণা আগে বলবে না। " +
+    "Stop শনাক্ত হলে action=stop। " +
+    "আরও খবরের জন্য action=auto। " +
+    "Official Cloud সমর্থন করলে পাঁচ সেকেন্ড " +
+    "Listening Window-এর পরে auto চালাবে। " +
+    "নিজে থেকে MCP call হওয়ার নিশ্চয়তা নেই। " +
+    "সংবাদ বানাবে না।",
   inputSchema: {
     type: "object",
     properties: {
@@ -1132,7 +1136,7 @@ const newsTool = {
           "stop"
         ],
         description:
-          "start = new bulletin; auto = continue current story or move to next; next = skip to next story; continue = next part; stop = stop bulletin."
+          "start = first two-news batch; auto/next/continue = next two-news batch; stop = stop bulletin."
       },
       category: {
         type: "string",
@@ -1410,6 +1414,9 @@ function connect() {
                 output.suggestedDelayMs,
               listening_window_ms: output.hasMore ? 5000 : 0,
               requires_listening_window: output.hasMore,
+              batch_size: NEWS_PER_BATCH,
+              batch_wait_ms: output.hasMore
+                ? NEWS_BATCH_WAIT_MS : 0,
               remaining_parts:
                 output.remainingParts,
               remaining_stories:
