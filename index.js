@@ -240,7 +240,7 @@ function professionalNewsOpening() {
     `বাংলা ${banglaDate}।`,
     `বাংলাদেশ সময় এখন ${time}।`,
     "এখন শুনছেন বিগত ছত্রিশ ঘণ্টায় প্রকাশিত গুরুত্বপূর্ণ ও সাম্প্রতিক সংবাদ।",
-    "সংবাদের সোর্স হলো BBC Bangla, Prothom Alo, Jago News 24, Bd 24 Live এবং Bangladesh Today"
+    "সংবাদের সোর্স হলো BBC Bangla, Prothom Alo, Jago News 24, Bd 24 Live এবং Bangladesh Today",
     "প্রতিটি সংবাদের শিরোনামের পর থাকছে তার বিস্তারিত প্রতিবেদন।",
     "চলুন, শুরু করা যাক।"
   ];
