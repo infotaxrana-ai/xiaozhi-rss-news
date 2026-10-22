@@ -1,26 +1,25 @@
+
 import http from "node:http";
 import WebSocket from "ws";
 import Parser from "rss-parser";
 
 // ==============================================
-// ALEXA BANGLA NEWS RADIO FALLBACK v3.4
-// Detailed Article Retrieval + Story Parts
-// Official Xiaozhi MCP
+// ALEXA BANGLA NEWS RADIO FALLBACK v3.5
+// Professional Opening + Bengali Calendar
+// Detailed News Engine v3.4 preserved
+// Music System unchanged
 // ==============================================
 
-const VERSION = "3.4.0";
+const VERSION = "3.5.0";
 const SERVICE = "Alexa Bangla News Radio Fallback";
 const PORT = Number(process.env.PORT || 10000);
-
 const WSS_URL = process.env.XIAOZHI_WSS_URL || "";
 
+const TIME_ZONE = "Asia/Dhaka";
 const CACHE_MS = 5 * 60 * 1000;
 const LOOKBACK_MS = 36 * 60 * 60 * 1000;
-
 const ARTICLE_TIMEOUT_MS = 8000;
 const MAX_HTML_BYTES = 1500000;
-
-// Prevent long LLM/TTS responses.
 const PART_CHARS = 520;
 const MAX_REPORT_CHARS = 1650;
 
@@ -61,7 +60,8 @@ const parser = new Parser({
   timeout: 9000,
   headers: {
     "User-Agent": "Mozilla/5.0",
-    "Accept": "application/rss+xml,application/xml,text/xml,*/*"
+    "Accept":
+      "application/rss+xml,application/atom+xml,application/xml,text/xml,*/*"
   },
   customFields: {
     item: [
@@ -97,6 +97,164 @@ let currentPartIndex = 0;
 const articleCache = new Map();
 
 // ==============================================
+// BANGLADESH DATE AND TIME
+// ==============================================
+
+function banglaDigits(value) {
+  const digits = "০১২৩৪৫৬৭৮৯";
+
+  return String(value).replace(/[0-9]/g, d => {
+    return digits[Number(d)];
+  });
+}
+
+function dhakaDateParts(date = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).formatToParts(date);
+
+  const get = type =>
+    Number(parts.find(p => p.type === type)?.value);
+
+  return {
+    year: get("year"),
+    month: get("month"),
+    day: get("day")
+  };
+}
+
+// Revised Bangladesh Bengali Calendar
+// Pohela Boishakh: April 14
+// First six months: 31 days
+// Falgun: 29 days, or 30 in leap year
+
+function bengaliCalendar(date = new Date()) {
+  const { year, month, day } = dhakaDateParts(date);
+
+  const currentUTC = Date.UTC(
+    year,
+    month - 1,
+    day
+  );
+
+  const newYearStarted =
+    month > 4 ||
+    (month === 4 && day >= 14);
+
+  const startYear = newYearStarted
+    ? year
+    : year - 1;
+
+  const banglaYear = startYear - 593;
+
+  const startUTC = Date.UTC(
+    startYear,
+    3,
+    14
+  );
+
+  let daysPassed = Math.floor(
+    (currentUTC - startUTC) / 86400000
+  );
+
+  const nextYear = startYear + 1;
+
+  const leap =
+    nextYear % 400 === 0 ||
+    (
+      nextYear % 4 === 0 &&
+      nextYear % 100 !== 0
+    );
+
+  const months = [
+    ["বৈশাখ", 31],
+    ["জ্যৈষ্ঠ", 31],
+    ["আষাঢ়", 31],
+    ["শ্রাবণ", 31],
+    ["ভাদ্র", 31],
+    ["আশ্বিন", 31],
+    ["কার্তিক", 30],
+    ["অগ্রহায়ণ", 30],
+    ["পৌষ", 30],
+    ["মাঘ", 30],
+    ["ফাল্গুন", leap ? 30 : 29],
+    ["চৈত্র", 30]
+  ];
+
+  for (const [name, days] of months) {
+    if (daysPassed < days) {
+      return (
+        banglaDigits(daysPassed + 1) +
+        " " +
+        name +
+        " " +
+        banglaDigits(banglaYear) +
+        " বঙ্গাব্দ"
+      );
+    }
+
+    daysPassed -= days;
+  }
+
+  return "বাংলা তারিখ পাওয়া যায়নি";
+}
+
+function gregorianDate(date = new Date()) {
+  return new Intl.DateTimeFormat("bn-BD", {
+    timeZone: TIME_ZONE,
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    year: "numeric"
+  }).format(date);
+}
+
+function bangladeshTime(date = new Date()) {
+  return new Intl.DateTimeFormat("bn-BD", {
+    timeZone: TIME_ZONE,
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true
+  }).format(date);
+}
+
+// ==============================================
+// PROFESSIONAL NEWS INTRODUCTION
+// ==============================================
+
+function professionalNewsOpening() {
+  const now = new Date();
+
+  const englishDate = gregorianDate(now);
+  const banglaDate = bengaliCalendar(now);
+  const time = bangladeshTime(now);
+
+  const lines = [
+    "আসসালামু আলাইকুম।",
+    "আমি মিসেস এলেক্সা।",
+    "এলেক্সার বিগত ছত্রিশ ঘণ্টার সংবাদ বুলেটিনে আপনাকে স্বাগতম।",
+    `আজ ${englishDate} খ্রিষ্টাব্দ।`,
+    `বাংলা ${banglaDate}।`,
+    `বাংলাদেশ সময় এখন ${time}।`,
+    "এখন শুনছেন বিগত ছত্রিশ ঘণ্টায় প্রকাশিত গুরুত্বপূর্ণ ও সাম্প্রতিক সংবাদ।",
+    "সংবাদের সোর্স হলো BBC Bangla, Prothom Alo, Jago News 24, Bd 24 Live এবং Bangladesh Today"
+    "প্রতিটি সংবাদের শিরোনামের পর থাকছে তার বিস্তারিত প্রতিবেদন।",
+    "চলুন, শুরু করা যাক।"
+  ];
+
+  console.log("[NEWS INTRO]", JSON.stringify({
+    gregorian: englishDate,
+    bengali: banglaDate,
+    time
+  }));
+
+  return lines.join(" ");
+}
+
+// ==============================================
 // TEXT PROCESSING
 // ==============================================
 
@@ -123,6 +281,7 @@ function decodeEntities(text) {
 
       if (key.startsWith("#")) {
         const hex = key.startsWith("#x");
+
         const n = parseInt(
           entity.slice(hex ? 2 : 1),
           hex ? 16 : 10
@@ -148,8 +307,14 @@ function decodeEntities(text) {
 function cleanText(value, limit = 5000) {
   return decodeEntities(
     String(value || "")
-      .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
-      .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ")
+      .replace(
+        /<script\b[^>]*>[\s\S]*?<\/script>/gi,
+        " "
+      )
+      .replace(
+        /<style\b[^>]*>[\s\S]*?<\/style>/gi,
+        " "
+      )
       .replace(/<[^>]+>/g, " ")
   )
     .replace(/\s+/g, " ")
@@ -179,8 +344,11 @@ function categoryOf(text) {
   if (/অর্থনীতি|বাণিজ্য|ব্যবসা|শেয়ারবাজার/.test(t))
     return "অর্থনীতি";
 
-  if (/আন্তর্জাতিক|বিশ্ব|যুক্তরাষ্ট্র|রাশিয়া|চীন|গাজা/.test(t))
+  if (
+    /আন্তর্জাতিক|বিশ্ব|যুক্তরাষ্ট্র|রাশিয়া|চীন|গাজা/.test(t)
+  ) {
     return "আন্তর্জাতিক";
+  }
 
   if (/বিনোদন|সিনেমা|অভিনেতা|অভিনেত্রী/.test(t))
     return "বিনোদন";
@@ -230,7 +398,6 @@ function allowedArticleUrl(rawUrl, sourceHost) {
     const host = u.hostname.toLowerCase();
     const allowed = sourceHost.toLowerCase();
 
-    // Only the source's own domain.
     if (
       host !== allowed &&
       !host.endsWith("." + allowed)
@@ -239,19 +406,19 @@ function allowedArticleUrl(rawUrl, sourceHost) {
     }
 
     return u.toString();
+
   } catch {
     return null;
   }
 }
 
 // ==============================================
-// ARTICLE HTML EXTRACTION
+// ARTICLE EXTRACTION
 // ==============================================
 
 function extractArticleParagraphs(html) {
   const original = String(html || "");
 
-  // Prefer semantic article body.
   const articleMatch = original.match(
     /<article\b[^>]*>([\s\S]*?)<\/article>/i
   );
@@ -267,7 +434,6 @@ function extractArticleParagraphs(html) {
       : "";
 
   if (!section) {
-    // Structured article sections used by news sites.
     const container = original.match(
       /<div\b[^>]*class=["'][^"']*(?:article-body|story-body|article-content|story-content)[^"']*["'][^>]*>([\s\S]*?)<\/div>/i
     );
@@ -278,10 +444,22 @@ function extractArticleParagraphs(html) {
   if (!section) return "";
 
   section = section
-    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "")
-    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, "")
-    .replace(/<nav\b[^>]*>[\s\S]*?<\/nav>/gi, "")
-    .replace(/<aside\b[^>]*>[\s\S]*?<\/aside>/gi, "");
+    .replace(
+      /<script\b[^>]*>[\s\S]*?<\/script>/gi,
+      ""
+    )
+    .replace(
+      /<style\b[^>]*>[\s\S]*?<\/style>/gi,
+      ""
+    )
+    .replace(
+      /<nav\b[^>]*>[\s\S]*?<\/nav>/gi,
+      ""
+    )
+    .replace(
+      /<aside\b[^>]*>[\s\S]*?<\/aside>/gi,
+      ""
+    );
 
   const matches = [
     ...section.matchAll(
@@ -300,15 +478,16 @@ function extractArticleParagraphs(html) {
     const key = normalize(p);
 
     if (seen.has(key)) continue;
-    seen.add(key);
 
+    seen.add(key);
     paragraphs.push(p);
 
     if (paragraphs.length >= 16) break;
   }
 
-  // Return a bounded source-based extract, not full article.
-  return paragraphs.join(" ").slice(0, MAX_REPORT_CHARS);
+  return paragraphs
+    .join(" ")
+    .slice(0, MAX_REPORT_CHARS);
 }
 
 async function readArticle(url, host) {
@@ -320,7 +499,7 @@ async function readArticle(url, host) {
 
   if (
     saved &&
-    Date.now() - saved.at < 60 * 60 * 1000
+    Date.now() - saved.at < 3600000
   ) {
     return saved.text;
   }
@@ -349,17 +528,13 @@ async function readArticle(url, host) {
         "[ARTICLE HTTP]",
         response.status
       );
-
       return "";
     }
 
-    const type = response.headers.get(
-      "content-type"
-    ) || "";
+    const type =
+      response.headers.get("content-type") || "";
 
-    if (!type.includes("text/html")) {
-      return "";
-    }
+    if (!type.includes("text/html")) return "";
 
     const declaredSize = Number(
       response.headers.get("content-length") || 0
@@ -416,6 +591,7 @@ async function readArticle(url, host) {
       "[ARTICLE ERROR]",
       error.message
     );
+
   } finally {
     clearTimeout(timeout);
   }
@@ -425,9 +601,10 @@ async function readArticle(url, host) {
     text: result
   });
 
-  // Bound cache size.
   if (articleCache.size > 150) {
-    const first = articleCache.keys().next().value;
+    const first =
+      articleCache.keys().next().value;
+
     articleCache.delete(first);
   }
 
@@ -435,13 +612,16 @@ async function readArticle(url, host) {
 }
 
 // ==============================================
-// RSS COLLECTION
+// RSS NEWS COLLECTION
 // ==============================================
 
 async function loadNews() {
   const now = Date.now();
 
-  if (cache.at && now - cache.at < CACHE_MS) {
+  if (
+    cache.at &&
+    now - cache.at < CACHE_MS
+  ) {
     return cache;
   }
 
@@ -467,13 +647,17 @@ async function loadNews() {
             !Number.isFinite(published) ||
             published < cutoff ||
             published > Date.now() + 600000
-          ) continue;
+          ) {
+            continue;
+          }
 
-          const title = cleanText(item.title, 300);
+          const title = cleanText(
+            item.title,
+            300
+          );
 
           if (!title) continue;
 
-          // Prefer fuller RSS content over short snippet.
           const options = [
             item.fullContent,
             item["content:encoded"],
@@ -491,12 +675,17 @@ async function loadNews() {
           articles.push({
             title,
             detail,
-            url: allowedArticleUrl(item.link, source.host),
+            url: allowedArticleUrl(
+              item.link,
+              source.host
+            ),
             host: source.host,
             source: source.name,
             language: source.language,
             published,
-            category: categoryOf(title + " " + detail)
+            category: categoryOf(
+              title + " " + detail
+            )
           });
         }
 
@@ -528,11 +717,13 @@ async function loadNews() {
           source.name,
           status[i].error
         );
+
         return;
       }
 
       for (const article of result.value) {
-        // English reports need actual translation first.
+        // English news remains excluded until
+        // reliable Bengali translation is available.
         if (article.language !== "bn") continue;
 
         const key = normalize(article.title);
@@ -543,7 +734,8 @@ async function loadNews() {
 
         if (
           !previous ||
-          article.detail.length > previous.detail.length
+          article.detail.length >
+            previous.detail.length
         ) {
           unique.set(key, article);
         }
@@ -551,7 +743,9 @@ async function loadNews() {
     });
 
     const articles = [...unique.values()]
-      .sort((a, b) => b.published - a.published);
+      .sort((a, b) =>
+        b.published - a.published
+      );
 
     if (articles.length) {
       cache = {
@@ -559,6 +753,7 @@ async function loadNews() {
         articles,
         status
       };
+
     } else {
       cache = {
         at: now,
@@ -572,8 +767,10 @@ async function loadNews() {
 
     console.log(
       "[NEWS]",
-      "Available:", cache.articles.length,
-      "Sources:", JSON.stringify(status)
+      "Available:",
+      cache.articles.length,
+      "Sources:",
+      JSON.stringify(status)
     );
 
     return cache;
@@ -627,16 +824,20 @@ function splitStory(text) {
 
     if (
       current &&
-      current.length + sentence.length + 1 > PART_CHARS
+      current.length +
+        sentence.length + 1 > PART_CHARS
     ) {
       parts.push(current.trim());
       current = "";
     }
 
-    current += (current ? " " : "") + sentence;
+    current +=
+      (current ? " " : "") + sentence;
   }
 
-  if (current) parts.push(current.trim());
+  if (current) {
+    parts.push(current.trim());
+  }
 
   return parts.filter(Boolean);
 }
@@ -648,9 +849,9 @@ function splitStory(text) {
 function startQueue(news, category) {
   queueCategory = normalizeCategory(category);
 
-  queue = news.articles.filter(a =>
+  queue = news.articles.filter(article =>
     queueCategory === "সব" ||
-    a.category === queueCategory
+    article.category === queueCategory
   );
 
   queueIndex = 0;
@@ -663,14 +864,14 @@ function startQueue(news, category) {
   console.log(
     "[QUEUE START]",
     queueCategory,
-    "Total:", queue.length
+    "Total:",
+    queue.length
   );
 }
 
 async function prepareStory(article) {
   let report = article.detail;
 
-  // Fetch original article only when RSS is too short.
   if (
     report.length < 500 &&
     article.url
@@ -680,7 +881,9 @@ async function prepareStory(article) {
       article.host
     );
 
-    if (extracted.length > report.length + 100) {
+    if (
+      extracted.length > report.length + 100
+    ) {
       report = extracted;
     }
   }
@@ -696,7 +899,10 @@ async function prepareStory(article) {
 
 async function nextStory() {
   if (!queueActive || !queue.length) {
-    return "সক্রিয় সংবাদ বুলেটিন নেই। নতুন করে খবর চালাতে বলুন।";
+    return (
+      "সক্রিয় সংবাদ বুলেটিন নেই। " +
+      "নতুন করে খবর চালাতে বলুন।"
+    );
   }
 
   if (queueIndex >= queue.length) {
@@ -715,38 +921,47 @@ async function nextStory() {
 
   let text = "";
 
+  // Professional opening only once per bulletin.
   if (isFirst) {
-    text +=
-      "স্বাগতম অ্যালেক্সা বাংলা নিউজ রেডিওতে। ";
+    text += professionalNewsOpening() + " ";
   }
 
   text +=
     "শিরোনাম। " +
     article.title +
-    "। এবার বিস্তারিত। ";
+    "। এবার বিস্তারিত সংবাদ। ";
 
   if (currentParts.length) {
     text += currentParts[0];
     currentPartIndex = 1;
+
   } else {
     text +=
-      "এই সংবাদটির বিস্তারিত তথ্য পাওয়া যায়নি।";
+      "এই সংবাদের বিস্তারিত তথ্য পাওয়া যায়নি।";
   }
 
-  if (currentPartIndex < currentParts.length) {
+  if (
+    currentPartIndex < currentParts.length
+  ) {
     text +=
       " এই সংবাদের আরও বিস্তারিত রয়েছে। " +
       "বাকি অংশ শুনতে বলুন, পরের অংশ।";
+
   } else {
     text +=
-      "। সংবাদ সূত্র " + article.source + "।";
+      "। সংবাদ সূত্র " +
+      article.source +
+      "।";
   }
 
   console.log(
     "[STORY]",
-    "News:", queueIndex,
-    "Parts:", currentParts.length,
-    "Remaining:", queue.length - queueIndex
+    "News:",
+    queueIndex,
+    "Parts:",
+    currentParts.length,
+    "Remaining:",
+    queue.length - queueIndex
   );
 
   return text;
@@ -754,31 +969,46 @@ async function nextStory() {
 
 function nextPart() {
   if (!currentStory || !currentParts.length) {
-    return "বর্তমানে কোনো সংবাদের বাকি অংশ নেই।";
+    return (
+      "বর্তমানে কোনো সংবাদের বাকি অংশ নেই।"
+    );
   }
 
-  if (currentPartIndex >= currentParts.length) {
-    return "এই সংবাদের বিস্তারিত শেষ হয়েছে। পরের খবর শুনতে পারেন।";
+  if (
+    currentPartIndex >= currentParts.length
+  ) {
+    return (
+      "এই সংবাদের বিস্তারিত শেষ হয়েছে। " +
+      "পরের খবর শুনতে পারেন।"
+    );
   }
 
   const text = currentParts[currentPartIndex];
+
   currentPartIndex++;
 
-  if (currentPartIndex < currentParts.length) {
-    return text +
-      " আরও বিস্তারিত শুনতে বলুন, পরের অংশ।";
+  if (
+    currentPartIndex < currentParts.length
+  ) {
+    return (
+      text +
+      " আরও বিস্তারিত শুনতে বলুন, পরের অংশ।"
+    );
   }
 
-  return text +
+  return (
+    text +
     "। সংবাদ সূত্র " +
     currentStory.source +
-    "। এই সংবাদের বিস্তারিত শেষ।";
+    "। এই সংবাদের বিস্তারিত শেষ।"
+  );
 }
 
 function stopNews() {
   queue = [];
   queueIndex = 0;
   queueActive = false;
+
   currentStory = null;
   currentParts = [];
   currentPartIndex = 0;
@@ -792,29 +1022,41 @@ function stopNews() {
 
 const newsTool = {
   name: "get_latest_news",
+
   description:
-    "Alexa Bangla News Radio Fallback v3.4। " +
-    "action=start দিয়ে খবর শুরু, next দিয়ে পরের সংবাদ, " +
-    "continue দিয়ে বর্তমান সংবাদের পরের অংশ, " +
-    "stop দিয়ে বন্ধ করো। " +
-    "প্রতিবার একটি সংবাদ বা তার একটি অংশ দেওয়া হবে। " +
-    "শিরোনামের পরে বিস্তারিত পড়ে শোনাও। " +
-    "সবসময় বাংলায় বলবে। Markdown numbering করবে না। " +
-    "অনুপস্থিত তথ্য নিজে থেকে তৈরি করবে না।",
+    "Alexa Bangla News Radio Fallback v3.5। " +
+    "action=start দিয়ে সংবাদ শুরু করো। " +
+    "শুরুতে সালাম, মিসেস এলেক্সার পরিচয়, " +
+    "ইংরেজি ও বঙ্গাব্দের তারিখ, বাংলাদেশ সময় " +
+    "এবং বিগত ৩৬ ঘণ্টার ঘোষণা থাকবে। " +
+    "তারপর শিরোনাম ও বিস্তারিত পড়বে। " +
+    "action=next দিয়ে পরের সংবাদ, " +
+    "action=continue দিয়ে বর্তমান সংবাদের " +
+    "পরের অংশ, action=stop দিয়ে বন্ধ। " +
+    "সবসময় বাংলায় পড়বে। " +
+    "Markdown বা অপ্রয়োজনীয় numbering নয়। " +
+    "কোনো সংবাদ বানিয়ে বলবে না।",
 
   inputSchema: {
     type: "object",
     properties: {
       action: {
         type: "string",
-        enum: ["start", "next", "continue", "stop"],
+        enum: [
+          "start",
+          "next",
+          "continue",
+          "stop"
+        ],
         description:
-          "start, next, continue, stop"
+          "start, next, continue অথবা stop"
       },
+
       category: {
         type: "string",
         description:
-          "সব, বাংলাদেশ, রাজনীতি, আন্তর্জাতিক, খেলাধুলা, অর্থনীতি, প্রযুক্তি, বিনোদন"
+          "সব, বাংলাদেশ, রাজনীতি, আন্তর্জাতিক, " +
+          "খেলাধুলা, অর্থনীতি, প্রযুক্তি, বিনোদন"
       }
     }
   }
@@ -829,7 +1071,9 @@ function respond(ws, id, payload) {
     id === undefined ||
     id === null ||
     ws.readyState !== WebSocket.OPEN
-  ) return;
+  ) {
+    return;
+  }
 
   ws.send(JSON.stringify({
     jsonrpc: "2.0",
@@ -853,19 +1097,27 @@ function reconnect() {
     Math.round(retryDelay * 1.5)
   );
 
-  console.log("[MCP] Reconnect in", delay, "ms");
+  console.log(
+    "[MCP] Reconnect in",
+    delay,
+    "ms"
+  );
 }
 
 function connect() {
   if (!WSS_URL.startsWith("wss://")) {
-    console.error("[MCP] Missing XIAOZHI_WSS_URL");
+    console.error(
+      "[MCP] Missing XIAOZHI_WSS_URL"
+    );
     return;
   }
 
   if (
     socket &&
     socket.readyState !== WebSocket.CLOSED
-  ) return;
+  ) {
+    return;
+  }
 
   const ws = new WebSocket(WSS_URL, {
     handshakeTimeout: 15000
@@ -880,14 +1132,19 @@ function connect() {
     console.log("[MCP] Connected");
 
     heartbeat = setInterval(() => {
-      if (ws.readyState === WebSocket.OPEN) {
+      if (
+        ws.readyState === WebSocket.OPEN
+      ) {
         ws.ping();
       }
     }, 30000);
   });
 
-  ws.on("error", e => {
-    console.error("[MCP ERROR]", e.message);
+  ws.on("error", error => {
+    console.error(
+      "[MCP ERROR]",
+      error.message
+    );
   });
 
   ws.on("close", (code, reason) => {
@@ -922,10 +1179,21 @@ function connect() {
     const id = msg.id;
 
     if (method === "initialize") {
+      const requested =
+        msg.params?.protocolVersion;
+
+      const supported = [
+        "2024-11-05",
+        "2025-03-26",
+        "2025-06-18"
+      ];
+
       respond(ws, id, {
         result: {
           protocolVersion:
-            msg.params?.protocolVersion || "2024-11-05",
+            supported.includes(requested)
+              ? requested
+              : "2024-11-05",
           capabilities: {
             tools: {}
           },
@@ -935,13 +1203,20 @@ function connect() {
           }
         }
       });
+
       return;
     }
 
-    if (method === "notifications/initialized") return;
+    if (
+      method === "notifications/initialized"
+    ) {
+      return;
+    }
 
     if (method === "ping") {
-      respond(ws, id, { result: {} });
+      respond(ws, id, {
+        result: {}
+      });
       return;
     }
 
@@ -952,36 +1227,53 @@ function connect() {
         }
       });
 
-      console.log("[MCP] Tool registered");
+      console.log(
+        "[MCP] Tool registered"
+      );
+
       return;
     }
 
     if (method === "tools/call") {
-      if (msg.params?.name !== newsTool.name) {
+      if (
+        msg.params?.name !== newsTool.name
+      ) {
         respond(ws, id, {
           error: {
             code: -32601,
             message: "Unknown tool"
           }
         });
+
         return;
       }
 
-      const args = msg.params?.arguments || {};
-      const action = args.action || "start";
+      const args =
+        msg.params?.arguments || {};
+
+      const action =
+        args.action || "start";
 
       try {
         let output;
 
         if (action === "stop") {
           output = stopNews();
+
         } else if (action === "continue") {
           output = nextPart();
+
         } else if (action === "next") {
           output = await nextStory();
+
         } else {
           const news = await loadNews();
-          startQueue(news, args.category);
+
+          startQueue(
+            news,
+            args.category
+          );
+
           output = await nextStory();
         }
 
@@ -998,14 +1290,21 @@ function connect() {
         console.log(
           "[NEWS SENT]",
           action,
-          "Characters:", output.length,
-          "QueueIndex:", queueIndex,
-          "Part:", currentPartIndex,
-          "/", currentParts.length
+          "Characters:",
+          output.length,
+          "QueueIndex:",
+          queueIndex,
+          "Part:",
+          currentPartIndex,
+          "/",
+          currentParts.length
         );
 
-      } catch (e) {
-        console.error("[NEWS ERROR]", e.message);
+      } catch (error) {
+        console.error(
+          "[NEWS ERROR]",
+          error.message
+        );
 
         respond(ws, id, {
           result: {
@@ -1022,7 +1321,11 @@ function connect() {
       return;
     }
 
-    if (method && id !== undefined && id !== null) {
+    if (
+      method &&
+      id !== undefined &&
+      id !== null
+    ) {
       respond(ws, id, {
         error: {
           code: -32601,
@@ -1034,18 +1337,22 @@ function connect() {
 }
 
 // ==============================================
-// HTTP HEALTH
+// HTTP HEALTH CHECK
 // ==============================================
 
 http.createServer((req, res) => {
-  if (req.url !== "/" && req.url !== "/health") {
+  if (
+    req.url !== "/" &&
+    req.url !== "/health"
+  ) {
     res.writeHead(404);
     res.end("Not found");
     return;
   }
 
   res.writeHead(200, {
-    "Content-Type": "application/json; charset=utf-8",
+    "Content-Type":
+      "application/json; charset=utf-8",
     "Cache-Control": "no-store"
   });
 
@@ -1060,13 +1367,32 @@ http.createServer((req, res) => {
       0,
       queue.length - queueIndex
     ),
-    currentStoryParts: currentParts.length,
+    currentStoryParts:
+      currentParts.length,
     currentPartIndex,
     sources: cache.status
   }));
+
 }).listen(PORT, "0.0.0.0", () => {
-  console.log("[HTTP] Listening on", PORT);
+  console.log(
+    "[HTTP] Listening on",
+    PORT
+  );
 });
 
-console.log("[SYSTEM]", SERVICE, VERSION);
+// ==============================================
+// START
+// ==============================================
+
+console.log(
+  "[SYSTEM]",
+  SERVICE,
+  VERSION
+);
+
+console.log(
+  "[SYSTEM] News sources:",
+  SOURCES.length
+);
+
 connect();
