@@ -1,3 +1,4 @@
+
 import http from "node:http";
 import WebSocket from "ws";
 import Parser from "rss-parser";
@@ -9,7 +10,7 @@ import Parser from "rss-parser";
 // Bengali News | 36 Hours | Detailed Reports
 // ============================================
 
-const VERSION = "3.6.0";
+const VERSION = "3.7.0";
 const SERVICE = "Alexa Bangla News Radio";
 const PORT = Number(process.env.PORT || 10000);
 const WSS_URL = process.env.XIAOZHI_WSS_URL || "";
@@ -26,7 +27,7 @@ const MAX_REPORT_CHARS = 1650;
 
 // Agent-side continuation target.
 // This is metadata, not a server-side TTS timer.
-const AUTO_DELAY_MS = 2000;
+const AUTO_DELAY_MS = 5000;
 
 const SOURCES = [
   {
@@ -900,8 +901,10 @@ function newsResponse(text, done = false) {
     queueActive &&
     (remainingParts > 0 || remainingStories > 0);
 
+  // NEWS_STOP_WINDOW_V37
+  const spokenText = hasMore ? text.trim() + " রানা ভাই, সংবাদ বন্ধ করতে স্টপ বলুন।" : text;
   return {
-    text,
+    text: spokenText,
     hasMore,
     done: !hasMore,
     nextAction: hasMore ? "auto" : null,
@@ -1405,6 +1408,8 @@ function connect() {
               next_action: output.nextAction,
               suggested_delay_ms:
                 output.suggestedDelayMs,
+              listening_window_ms: output.hasMore ? 5000 : 0,
+              requires_listening_window: output.hasMore,
               remaining_parts:
                 output.remainingParts,
               remaining_stories:
