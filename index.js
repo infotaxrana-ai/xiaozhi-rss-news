@@ -2,30 +2,17 @@ import http from "node:http";
 import WebSocket from "ws";
 import Parser from "rss-parser";
 
-// ==================================================
-// ALEXA BANGLA NEWS RADIO v3.0
-// Headlines first, then detailed radio bulletin
-// Official Xiaozhi MCP
-// ==================================================
+// Alexa Bangla News Radio - MCP Fallback v3.3
+// Existing Music System remains unchanged.
 
 const PORT = Number(process.env.PORT || 10000);
-const SERVICE_NAME = "Alexa Bangla News Radio";
-const VERSION = "3.0.0";
+const SERVICE = "Alexa Bangla News Radio Fallback";
+const VERSION = "3.3.0";
+const WSS_URL = process.env.XIAOZHI_WSS_URL || "";
 
-const XIAOZHI_WSS_URL =
-  process.env.XIAOZHI_WSS_URL || "";
-
-const TIME_ZONE = "Asia/Dhaka";
 const CACHE_MS = 5 * 60 * 1000;
-
-// Last 36 hours, including yesterday's news.
-const LOOKBACK_HOURS = 36;
-
-// News per bulletin. Limits protect Xiaozhi TTS.
-const DEFAULT_BATCH = 8;
-const MAX_BATCH = 12;
-const MAX_STORIES = 400;
-const MAX_SUMMARY_CHARS = 850;
+const LOOKBACK_MS = 36 * 60 * 60 * 1000;
+const MAX_DETAIL = 850;
 
 const SOURCES = [
   {
@@ -59,73 +46,33 @@ const parser = new Parser({
   timeout: 9000,
   headers: {
     "User-Agent": "Mozilla/5.0",
-    "Accept":
-      "application/rss+xml,application/atom+xml,application/xml,text/xml,*/*"
+    "Accept": "application/rss+xml,application/atom+xml,application/xml,text/xml,*/*"
   }
 });
 
 let cache = {
   at: 0,
   articles: [],
-  statuses: []
+  status: []
 };
 
 let fetching = null;
 let connected = false;
 let socket = null;
-let reconnectTimer = null;
-let heartbeatTimer = null;
-let reconnectDelay = 5000;
+let retryTimer = null;
+let retryDelay = 5000;
+let heartbeat = null;
 
-let lastCloseCode = null;
-let lastCloseReason = "";
-let lastMethod = "";
+let queue = [];
+let queueIndex = 0;
+let queueCategory = "সব";
+let queueActive = false;
 
-// ==================================================
-// DATE UTILITIES
-// ==================================================
-
-function bdDate(value) {
-  return new Intl.DateTimeFormat("bn-BD", {
-    timeZone: TIME_ZONE,
-    day: "numeric",
-    month: "long",
-    year: "numeric"
-  }).format(value);
-}
-
-function bdDateKey(value) {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: TIME_ZONE,
-    day: "2-digit",
-    month: "2-digit",
-    year: "numeric"
-  }).formatToParts(value);
-
-  const get = key =>
-    parts.find(x => x.type === key)?.value;
-
-  return `${get("year")}-${get("month")}-${get("day")}`;
-}
-
-function bdTime(value) {
-  return new Intl.DateTimeFormat("bn-BD", {
-    timeZone: TIME_ZONE,
-    hour: "numeric",
-    minute: "2-digit",
-    hour12: true
-  }).format(value);
-}
-
-// ==================================================
-// TEXT UTILITIES
-// ==================================================
-
-function cleanText(value, max = 4000) {
+function clean(value, limit = 2000) {
   return String(value || "")
     .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
     .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ")
-    .replace(/<[^>]*>/g, " ")
+    .replace(/<[^>]+>/g, " ")
     .replace(/&nbsp;|&#160;/gi, " ")
     .replace(/&amp;/gi, "&")
     .replace(/&quot;/gi, '"')
@@ -134,11 +81,11 @@ function cleanText(value, max = 4000) {
     .replace(/&gt;/gi, ">")
     .replace(/\s+/g, " ")
     .trim()
-    .slice(0, max);
+    .slice(0, limit);
 }
 
-function duplicateKey(text) {
-  return cleanText(text, 500)
+function normalize(text) {
+  return clean(text, 500)
     .toLowerCase()
     .replace(/[^\p{L}\p{N}]+/gu, " ")
     .trim();
@@ -147,53 +94,65 @@ function duplicateKey(text) {
 function categoryOf(text) {
   const t = String(text).toLowerCase();
 
-  if (/রাজনীতি|নির্বাচন|সংসদ|politic|election/.test(t))
+  if (/রাজনীতি|নির্বাচন|সংসদ/.test(t))
     return "রাজনীতি";
 
-  if (/ক্রিকেট|ফুটবল|খেলা|sport|cricket|football/.test(t))
+  if (/ক্রিকেট|ফুটবল|খেলা|ম্যাচ/.test(t))
     return "খেলাধুলা";
 
-  if (/প্রযুক্তি|বিজ্ঞান|এআই|technology|science|artificial intelligence/.test(t))
+  if (/প্রযুক্তি|বিজ্ঞান|কৃত্রিম বুদ্ধিমত্তা/.test(t))
     return "প্রযুক্তি";
 
-  if (/অর্থনীতি|ব্যবসা|বাণিজ্য|economy|business|market/.test(t))
+  if (/অর্থনীতি|বাণিজ্য|ব্যবসা|শেয়ারবাজার/.test(t))
     return "অর্থনীতি";
 
-  if (/বিশ্ব|আন্তর্জাতিক|যুক্তরাষ্ট্র|চীন|রাশিয়া|world|international/.test(t))
+  if (/আন্তর্জাতিক|বিশ্ব|যুক্তরাষ্ট্র|রাশিয়া|চীন|গাজা/.test(t))
     return "আন্তর্জাতিক";
 
-  if (/বিনোদন|সিনেমা|তারকা|entertainment|film/.test(t))
+  if (/বিনোদন|সিনেমা|অভিনেতা|অভিনেত্রী/.test(t))
     return "বিনোদন";
 
-  return "বাংলাদেশ ও অন্যান্য";
+  return "বাংলাদেশ";
 }
 
-// ==================================================
-// RSS COLLECTION
-// ==================================================
+function normalizeCategory(input) {
+  const t = String(input || "সব").trim().toLowerCase();
 
-async function refreshNews() {
+  if (/বাংলাদেশ|জাতীয়|জাতীয়|national|bangladesh/.test(t))
+    return "বাংলাদেশ";
+
+  if (/রাজনীতি|politic/.test(t))
+    return "রাজনীতি";
+
+  if (/খেলা|sport/.test(t))
+    return "খেলাধুলা";
+
+  if (/প্রযুক্তি|বিজ্ঞান|tech/.test(t))
+    return "প্রযুক্তি";
+
+  if (/অর্থনীতি|ব্যবসা|বাণিজ্য|econom/.test(t))
+    return "অর্থনীতি";
+
+  if (/বিশ্ব|আন্তর্জাতিক|world|international/.test(t))
+    return "আন্তর্জাতিক";
+
+  if (/বিনোদন|entertainment/.test(t))
+    return "বিনোদন";
+
+  return "সব";
+}
+
+async function loadNews() {
   const now = Date.now();
 
-  if (
-    cache.articles.length &&
-    now - cache.at < CACHE_MS
-  ) {
+  if (cache.at && now - cache.at < CACHE_MS) {
     return cache;
   }
 
   if (fetching) return fetching;
 
   fetching = (async () => {
-    const started = Date.now();
-    const cutoff =
-      started - LOOKBACK_HOURS * 60 * 60 * 1000;
-
-    console.log(
-      "[RSS] Fetching last",
-      LOOKBACK_HOURS,
-      "hours of news"
-    );
+    const cutoff = Date.now() - LOOKBACK_MS;
 
     const results = await Promise.allSettled(
       SOURCES.map(async source => {
@@ -201,44 +160,36 @@ async function refreshNews() {
         const articles = [];
 
         for (const item of feed.items || []) {
-          const rawDate =
-            item.isoDate ||
-            item.pubDate ||
-            item.published;
+          const dateValue = item.isoDate || item.pubDate;
+          if (!dateValue) continue;
 
-          if (!rawDate) continue;
+          const timestamp = Date.parse(dateValue);
 
-          const published = new Date(rawDate);
-          const timestamp = published.getTime();
-
-          if (!Number.isFinite(timestamp)) continue;
-
-          // Ignore future-dated and old news.
           if (
+            !Number.isFinite(timestamp) ||
             timestamp < cutoff ||
-            timestamp > started + 10 * 60 * 1000
-          ) {
-            continue;
-          }
+            timestamp > Date.now() + 600000
+          ) continue;
 
-          const title = cleanText(item.title, 400);
-          if (!title) continue;
+          const title = clean(item.title, 300);
 
-          const summary = cleanText(
+          const detail = clean(
             item.contentSnippet ||
             item.summary ||
             item.content ||
             item["content:encoded"],
-            MAX_SUMMARY_CHARS
+            MAX_DETAIL
           );
+
+          if (!title) continue;
 
           articles.push({
             title,
-            summary,
+            detail,
             source: source.name,
             language: source.language,
-            published: published.toISOString(),
-            category: categoryOf(title + " " + summary)
+            published: timestamp,
+            category: categoryOf(title + " " + detail)
           });
         }
 
@@ -246,74 +197,59 @@ async function refreshNews() {
       })
     );
 
-    const statuses = results.map((result, i) => ({
-      source: SOURCES[i].name,
-      healthy: result.status === "fulfilled",
-      count: result.status === "fulfilled"
-        ? result.value.length
-        : 0,
-      error: result.status === "rejected"
-        ? String(
-            result.reason?.message || result.reason
-          ).slice(0, 120)
-        : ""
-    }));
+    const status = [];
+    const unique = new Map();
 
-    for (const state of statuses) {
-      if (!state.healthy) {
-        console.warn(
-          "[RSS FAILED]",
-          state.source,
-          state.error
-        );
+    results.forEach((result, index) => {
+      const source = SOURCES[index];
+
+      const ok = result.status === "fulfilled";
+
+      status.push({
+        name: source.name,
+        ok,
+        count: ok ? result.value.length : 0,
+        error: ok ? "" : String(result.reason?.message || result.reason).slice(0, 100)
+      });
+
+      if (!ok) {
+        console.warn("[RSS FAILED]", source.name, status[index].error);
+        return;
       }
-    }
 
-    const seen = new Map();
+      for (const item of result.value) {
+        // English content needs a real translation
+        // service before it can become Bengali audio.
+        if (item.language !== "bn") continue;
 
-    for (const result of results) {
-      if (result.status !== "fulfilled") continue;
+        const key = normalize(item.title);
 
-      for (const article of result.value) {
-        const key = duplicateKey(article.title);
-
-        if (!key || seen.has(key)) continue;
-        seen.set(key, article);
+        if (key && !unique.has(key)) {
+          unique.set(key, item);
+        }
       }
-    }
+    });
 
-    const articles = [...seen.values()]
-      .sort((a, b) =>
-        b.published.localeCompare(a.published)
-      )
-      .slice(0, MAX_STORIES);
+    const articles = [...unique.values()]
+      .sort((a, b) => b.published - a.published);
 
     if (articles.length) {
-      cache = {
-        at: started,
-        articles,
-        statuses
-      };
+      cache = { at: now, articles, status };
     } else {
-      // Retain recent cached content only.
-      const recent = cache.articles.filter(
-        item => {
-          const stamp = Date.parse(item.published);
-          return stamp >= cutoff && stamp <= started;
-        }
-      );
-
       cache = {
-        at: started,
-        articles: recent,
-        statuses
+        at: now,
+        articles: cache.articles.filter(a =>
+          a.published >= cutoff &&
+          a.published <= now
+        ),
+        status
       };
     }
 
     console.log(
       "[NEWS]",
-      "Articles:", cache.articles.length,
-      "Sources:", JSON.stringify(statuses)
+      "Available:", cache.articles.length,
+      "Sources:", JSON.stringify(status)
     );
 
     return cache;
@@ -326,171 +262,288 @@ async function refreshNews() {
   }
 }
 
-// ==================================================
-// RADIO NEWS SCRIPT
-// ==================================================
+function startQueue(news, category) {
+  queueCategory = normalizeCategory(category);
 
-function makeBulletin(news, args = {}) {
-  if (!news.articles.length) {
-    return (
-      "দুঃখিত, গত ছত্রিশ ঘণ্টার যাচাইযোগ্য " +
-      "সংবাদ এই মুহূর্তে পাওয়া যাচ্ছে না।"
-    );
-  }
+  queue = news.articles.filter(a =>
+    queueCategory === "সব" ||
+    a.category === queueCategory
+  );
 
-  const offset = Number.isInteger(args.offset)
-    ? Math.max(0, Math.min(args.offset, MAX_STORIES))
-    : 0;
+  queueIndex = 0;
+  queueActive = queue.length > 0;
 
-  const limit = Number.isInteger(args.limit)
-    ? Math.max(1, Math.min(args.limit, MAX_BATCH))
-    : DEFAULT_BATCH;
-
-  const category =
-    typeof args.category === "string"
-      ? args.category.trim()
-      : "";
-
-  const pool =
-    category && category !== "সব"
-      ? news.articles.filter(
-          item => item.category === category
-        )
-      : news.articles;
-
-  const selected = pool.slice(offset, offset + limit);
-
-  if (!selected.length) {
-    return (
-      "এই নির্বাচিত সংবাদ তালিকার আর কোনো খবর " +
-      "নেই। চাইলে অন্য বিভাগের খবর শুনতে পারেন।"
-    );
-  }
-
-  const now = new Date();
-
-  let script = "";
-
-  // News anchor opening.
-  if (offset === 0) {
-    script +=
-      "আসসালামু আলাইকুম। " +
-      "স্বাগতম অ্যালেক্সা বাংলা নিউজ রেডিওতে। " +
-      `আজ ${bdDate(now)}। ` +
-      `বাংলাদেশ সময় ${bdTime(now)}। ` +
-      "এখন শুনছেন সাম্প্রতিক সংবাদ বুলেটিন। " +
-      "এতে গত ছত্রিশ ঘণ্টায় প্রকাশিত খবর রয়েছে। " +
-      "\n\n";
-  } else {
-    script +=
-      "স্বাগতম। এবার শুনুন সংবাদ বুলেটিনের " +
-      "পরবর্তী অংশ।\n\n";
-  }
-
-  // All headlines before the detailed reports.
-  script += "প্রথমেই সংবাদ শিরোনাম।\n\n";
-
-  selected.forEach((article, i) => {
-    script +=
-      `${offset + i + 1} নম্বর শিরোনাম। ` +
-      `${article.title}।\n`;
-  });
-
-  script +=
-    "\nএবার শুনুন বিস্তারিত সংবাদ।\n\n";
-
-  // Detailed stories.
-  selected.forEach((article, i) => {
-    script +=
-      `সংবাদ ${offset + i + 1}। ` +
-      `${article.title}।\n`;
-
-    script +=
-      `সংবাদ সূত্র, ${article.source}। `;
-
-    if (article.language === "en") {
-      script +=
-        "এই সংবাদটি ইংরেজি উৎস থেকে সংগ্রহ করা। " +
-        "মূল তথ্য অপরিবর্তিত রেখে বাংলায় " +
-        "উপস্থাপন করুন। ";
-    }
-
-    script += article.summary
-      ? `${article.summary}।\n\n`
-      : "RSS সূত্রে এই খবরের বিস্তারিত " +
-        "বিবরণ পাওয়া যায়নি।\n\n";
-  });
-
-  const next = offset + selected.length;
-
-  if (next < pool.length) {
-    script +=
-      "এই পর্বের বিস্তারিত সংবাদ এখানেই শেষ। " +
-      `আরও ${pool.length - next}টি সংবাদ রয়েছে। ` +
-      "পরবর্তী পর্ব শুনতে বলুন, পরের খবর। " +
-      `পরবর্তী offset ${next}।`;
-  } else {
-    script +=
-      "সাম্প্রতিক সংগৃহীত সংবাদ বুলেটিন " +
-      "এখানেই শেষ। আমাদের সঙ্গে থাকার " +
-      "জন্য ধন্যবাদ।";
-  }
-
-  return script;
+  console.log(
+    "[QUEUE START]",
+    queueCategory,
+    "Total:", queue.length
+  );
 }
 
-// ==================================================
-// MCP TOOL
-// ==================================================
+function nextStory() {
+  if (!queueActive || !queue.length) {
+    return "এই মুহূর্তে কোনো সক্রিয় সংবাদ বুলেটিন নেই। নতুন করে খবর চালাতে বলুন।";
+  }
+
+  if (queueIndex >= queue.length) {
+    queueActive = false;
+    return "সংগৃহীত সব সংবাদ শেষ হয়েছে। ধন্যবাদ।";
+  }
+
+  const article = queue[queueIndex];
+  const number = queueIndex + 1;
+  queueIndex++;
+
+  let text = "";
+
+  if (number === 1) {
+    text += "স্বাগতম অ্যালেক্সা বাংলা নিউজ রেডিওতে। ";
+  }
+
+  text += "শিরোনাম। ";
+  text += article.title + "। ";
+  text += "এবার বিস্তারিত। ";
+  text += article.detail ||
+    "এই সংবাদের বিস্তারিত বিবরণ RSS-এ পাওয়া যায়নি।";
+
+  text += "। সংবাদ সূত্র " + article.source + "। ";
+
+  if (queueIndex >= queue.length) {
+    queueActive = false;
+    text += "এই বুলেটিনের সব সংবাদ শেষ।";
+  }
+
+  console.log(
+    "[QUEUE NEXT]",
+    number,
+    "Remaining:",
+    queue.length - queueIndex
+  );
+
+  return text;
+}
 
 const newsTool = {
   name: "get_latest_news",
-
   description:
-    "Alexa Bangla News Radio। এই টুল দিয়ে " +
-    "গত ৩৬ ঘণ্টার বাংলা ও আন্তর্জাতিক সংবাদ " +
-    "পাওয়া যায়। ব্যবহারকারী খবর শুনতে চাইলে " +
-    "এই টুল ব্যবহার করো। ফিরিয়ে দেওয়া " +
-    "বুলেটিনের শুরুতে সব শিরোনাম, তারপর " +
-    "প্রতিটি খবরের বিস্তারিত রয়েছে। " +
-    "বুলেটিনের ধারাবাহিকতা বজায় রাখো। " +
-    "নতুন বুলেটিনে offset 0 ব্যবহার করো। " +
-    "ব্যবহারকারী পরের খবর চাইলে আগের " +
-    "offset এবং limit অনুযায়ী পরবর্তী " +
-    "offset ব্যবহার করো। সংবাদ বানিয়ে বলবে না।",
+    "Alexa Bangla News Radio fallback MCP. " +
+    "খবর শুরু করতে action=start, পরের খবরের জন্য " +
+    "action=next এবং বন্ধ করতে action=stop ব্যবহার করো। " +
+    "প্রতিবার শুধু একটি খবরের শিরোনাম এবং বিস্তারিত ফেরত আসে। " +
+    "সবসময় বাংলায় পড়বে। কোনো Markdown বা সংখ্যার তালিকা তৈরি করবে না। " +
+    "এই টুল নিজের থেকে অডিও চালু রাখতে পারে না।",
 
   inputSchema: {
     type: "object",
     properties: {
-      offset: {
-        type: "integer",
-        minimum: 0,
+      action: {
+        type: "string",
+        enum: ["start", "next", "stop"],
         description:
-          "প্রথম পর্বে 0। পরের পর্বে " +
-          "পূর্ববর্তী offset + limit।"
-      },
-      limit: {
-        type: "integer",
-        minimum: 1,
-        maximum: MAX_BATCH,
-        description:
-          "প্রতি পর্বে সর্বোচ্চ 12টি খবর। " +
-          "ডিফল্ট 8।"
+          "start নতুন সংবাদ, next পরবর্তী সংবাদ, stop বন্ধ।"
       },
       category: {
         type: "string",
         description:
-          "সব, রাজনীতি, খেলাধুলা, প্রযুক্তি, " +
-          "অর্থনীতি, আন্তর্জাতিক, বিনোদন, " +
-          "বাংলাদেশ ও অন্যান্য।"
+          "সব, বাংলাদেশ, রাজনীতি, আন্তর্জাতিক, খেলাধুলা, অর্থনীতি, প্রযুক্তি, বিনোদন।"
       }
     }
   }
 };
 
-// ==================================================
-// HTTP HEALTH
-// ==================================================
+function respond(ws, id, payload) {
+  if (
+    id === undefined ||
+    id === null ||
+    ws.readyState !== WebSocket.OPEN
+  ) return;
+
+  ws.send(JSON.stringify({
+    jsonrpc: "2.0",
+    id,
+    ...payload
+  }));
+}
+
+function scheduleReconnect() {
+  if (retryTimer) return;
+
+  const delay = retryDelay;
+
+  retryTimer = setTimeout(() => {
+    retryTimer = null;
+    connect();
+  }, delay);
+
+  retryDelay = Math.min(30000, retryDelay * 1.5);
+
+  console.log("[MCP] Reconnect in", delay, "ms");
+}
+
+function connect() {
+  if (!WSS_URL.startsWith("wss://")) {
+    console.error("[MCP] Missing XIAOZHI_WSS_URL");
+    return;
+  }
+
+  if (
+    socket &&
+    socket.readyState !== WebSocket.CLOSED
+  ) return;
+
+  const ws = new WebSocket(WSS_URL, {
+    handshakeTimeout: 15000
+  });
+
+  socket = ws;
+
+  ws.on("open", () => {
+    connected = true;
+    retryDelay = 5000;
+
+    console.log("[MCP] Connected");
+
+    heartbeat = setInterval(() => {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.ping();
+      }
+    }, 30000);
+  });
+
+  ws.on("error", e => {
+    console.error("[MCP ERROR]", e.message);
+  });
+
+  ws.on("close", (code, reason) => {
+    if (heartbeat) {
+      clearInterval(heartbeat);
+      heartbeat = null;
+    }
+
+    if (socket === ws) {
+      socket = null;
+      connected = false;
+      scheduleReconnect();
+    }
+
+    console.warn(
+      "[MCP CLOSED]",
+      code,
+      reason.toString("utf8").slice(0, 120)
+    );
+  });
+
+  ws.on("message", async raw => {
+    let msg;
+
+    try {
+      msg = JSON.parse(raw.toString());
+    } catch {
+      return;
+    }
+
+    const method = msg.method;
+    const id = msg.id;
+
+    if (method === "initialize") {
+      respond(ws, id, {
+        result: {
+          protocolVersion: msg.params?.protocolVersion || "2024-11-05",
+          capabilities: { tools: {} },
+          serverInfo: {
+            name: SERVICE,
+            version: VERSION
+          }
+        }
+      });
+      return;
+    }
+
+    if (method === "notifications/initialized") return;
+
+    if (method === "ping") {
+      respond(ws, id, { result: {} });
+      return;
+    }
+
+    if (method === "tools/list") {
+      respond(ws, id, {
+        result: { tools: [newsTool] }
+      });
+
+      console.log("[MCP] Tool registered");
+      return;
+    }
+
+    if (method === "tools/call") {
+      if (msg.params?.name !== newsTool.name) {
+        respond(ws, id, {
+          error: {
+            code: -32601,
+            message: "Unknown tool"
+          }
+        });
+        return;
+      }
+
+      const args = msg.params?.arguments || {};
+      const action = args.action || "start";
+
+      let output;
+
+      try {
+        if (action === "stop") {
+          queueActive = false;
+          queue = [];
+          queueIndex = 0;
+          output = "সংবাদ পরিবেশনা বন্ধ করা হলো.";
+        } else if (action === "next") {
+          output = nextStory();
+        } else {
+          const news = await loadNews();
+          startQueue(news, args.category);
+          output = nextStory();
+        }
+
+        respond(ws, id, {
+          result: {
+            content: [{ type: "text", text: output }],
+            isError: false
+          }
+        });
+
+        console.log(
+          "[NEWS SENT]",
+          "action:", action,
+          "characters:", output.length
+        );
+      } catch (e) {
+        console.error("[NEWS ERROR]", e.message);
+
+        respond(ws, id, {
+          result: {
+            isError: true,
+            content: [{
+              type: "text",
+              text: "সংবাদ সংগ্রহ করতে সমস্যা হয়েছে।"
+            }]
+          }
+        });
+      }
+
+      return;
+    }
+
+    if (method && id !== undefined && id !== null) {
+      respond(ws, id, {
+        error: {
+          code: -32601,
+          message: "Method not found"
+        }
+      });
+    }
+  });
+}
 
 http.createServer((req, res) => {
   if (req.url !== "/" && req.url !== "/health") {
@@ -505,322 +558,18 @@ http.createServer((req, res) => {
   });
 
   res.end(JSON.stringify({
-    service: SERVICE_NAME,
+    service: SERVICE,
     version: VERSION,
     mcpConnected: connected,
-    cachedArticles: cache.articles.length,
-    sources: cache.statuses,
-    lastMethod,
-    lastCloseCode,
-    lastCloseReason
+    cachedNews: cache.articles.length,
+    queueActive,
+    nextIndex: queueIndex,
+    remaining: Math.max(0, queue.length - queueIndex),
+    sources: cache.status
   }));
 }).listen(PORT, "0.0.0.0", () => {
   console.log("[HTTP] Listening on", PORT);
 });
 
-// ==================================================
-// MCP CONNECTION
-// ==================================================
-
-function reply(ws, id, payload) {
-  if (
-    ws.readyState !== WebSocket.OPEN ||
-    id === undefined ||
-    id === null
-  ) {
-    return;
-  }
-
-  ws.send(JSON.stringify({
-    jsonrpc: "2.0",
-    id,
-    ...payload
-  }));
-}
-
-function stopHeartbeat() {
-  if (heartbeatTimer) {
-    clearInterval(heartbeatTimer);
-    heartbeatTimer = null;
-  }
-}
-
-function startHeartbeat(ws) {
-  stopHeartbeat();
-
-  heartbeatTimer = setInterval(() => {
-    if (
-      socket === ws &&
-      ws.readyState === WebSocket.OPEN
-    ) {
-      try {
-        ws.ping();
-      } catch (error) {
-        console.warn(
-          "[MCP HEARTBEAT]",
-          error.message
-        );
-      }
-    }
-  }, 30000);
-}
-
-function reconnect() {
-  if (reconnectTimer) return;
-
-  const delay = reconnectDelay;
-
-  console.log(
-    `[MCP] Reconnecting in ${delay / 1000}s`
-  );
-
-  reconnectTimer = setTimeout(() => {
-    reconnectTimer = null;
-    connect();
-  }, delay);
-
-  reconnectDelay = Math.min(
-    30000,
-    Math.round(reconnectDelay * 1.5)
-  );
-}
-
-function connect() {
-  if (!XIAOZHI_WSS_URL.startsWith("wss://")) {
-    console.error(
-      "[MCP] XIAOZHI_WSS_URL missing."
-    );
-    return;
-  }
-
-  if (
-    socket &&
-    (
-      socket.readyState === WebSocket.OPEN ||
-      socket.readyState === WebSocket.CONNECTING
-    )
-  ) {
-    return;
-  }
-
-  console.log("[MCP] Connecting to Xiaozhi...");
-
-  const ws = new WebSocket(XIAOZHI_WSS_URL, {
-    handshakeTimeout: 15000
-  });
-
-  socket = ws;
-
-  let openedAt = 0;
-
-  ws.on("open", () => {
-    openedAt = Date.now();
-    connected = true;
-
-    console.log("[MCP] Connected successfully");
-
-    startHeartbeat(ws);
-  });
-
-  ws.on("error", error => {
-    console.error(
-      "[MCP ERROR]",
-      error.message
-    );
-  });
-
-  ws.on("close", (code, reason) => {
-    const text =
-      reason?.toString("utf8") ||
-      "No reason provided";
-
-    lastCloseCode = code;
-    lastCloseReason = text.slice(0, 200);
-
-    console.warn(
-      "[MCP DISCONNECTED]",
-      JSON.stringify({
-        code,
-        reason: lastCloseReason,
-        connectedSeconds: openedAt
-          ? Math.round(
-              (Date.now() - openedAt) / 1000
-            )
-          : 0
-      })
-    );
-
-    if (socket === ws) {
-      socket = null;
-      connected = false;
-      stopHeartbeat();
-      reconnect();
-    }
-  });
-
-  ws.on("message", async data => {
-    let msg;
-
-    try {
-      msg = JSON.parse(data.toString());
-    } catch {
-      console.warn("[MCP] Invalid JSON");
-      return;
-    }
-
-    const method = msg.method || "";
-    const id = msg.id;
-
-    if (method) {
-      lastMethod = method;
-      console.log("[MCP REQUEST]", method);
-    }
-
-    // MCP Initialize.
-    if (method === "initialize") {
-      const requested =
-        msg.params?.protocolVersion;
-
-      const supported = [
-        "2024-11-05",
-        "2025-03-26",
-        "2025-06-18"
-      ];
-
-      reply(ws, id, {
-        result: {
-          protocolVersion:
-            supported.includes(requested)
-              ? requested
-              : "2024-11-05",
-          capabilities: {
-            tools: {}
-          },
-          serverInfo: {
-            name: SERVICE_NAME,
-            version: VERSION
-          }
-        }
-      });
-
-      console.log("[MCP] Initialize response sent");
-      return;
-    }
-
-    if (method === "notifications/initialized") {
-      console.log("[MCP] Initialization complete");
-      return;
-    }
-
-    if (method === "ping") {
-      reply(ws, id, {
-        result: {}
-      });
-      return;
-    }
-
-    if (method === "tools/list") {
-      reply(ws, id, {
-        result: {
-          tools: [newsTool]
-        }
-      });
-
-      reconnectDelay = 5000;
-
-      console.log(
-        "[MCP] Tool registered:",
-        newsTool.name
-      );
-      return;
-    }
-
-    if (method === "tools/call") {
-      if (msg.params?.name !== newsTool.name) {
-        reply(ws, id, {
-          error: {
-            code: -32601,
-            message: "Unknown tool"
-          }
-        });
-        return;
-      }
-
-      const args = msg.params?.arguments || {};
-
-      console.log(
-        "[NEWS] Tool called:",
-        JSON.stringify(args)
-      );
-
-      try {
-        const news = await refreshNews();
-        const output = makeBulletin(news, args);
-
-        reply(ws, id, {
-          result: {
-            content: [{
-              type: "text",
-              text: output
-            }],
-            isError: false
-          }
-        });
-
-        console.log(
-          "[NEWS] Bulletin sent",
-          "Articles:", news.articles.length,
-          "Characters:", output.length
-        );
-      } catch (error) {
-        console.error(
-          "[NEWS ERROR]",
-          error.message
-        );
-
-        reply(ws, id, {
-          result: {
-            isError: true,
-            content: [{
-              type: "text",
-              text:
-                "সংবাদ সংগ্রহে সমস্যা হয়েছে।"
-            }]
-          }
-        });
-      }
-      return;
-    }
-
-    if (
-      method &&
-      id !== undefined &&
-      id !== null
-    ) {
-      reply(ws, id, {
-        error: {
-          code: -32601,
-          message: "Method not found"
-        }
-      });
-    }
-  });
-}
-
-// ==================================================
-// START
-// ==================================================
-
-console.log(
-  "[SYSTEM]",
-  SERVICE_NAME,
-  "Version:",
-  VERSION
-);
-
-console.log(
-  "[SYSTEM] RSS sources:",
-  SOURCES.length
-);
-
+console.log("[SYSTEM]", SERVICE, VERSION);
 connect();
